@@ -2,6 +2,10 @@
 
 ## Unreleased — REL-TS-02 implementation slice (2026-08-24)
 
+- added an optional Libra Memory recall module for accepted DSH turns, including
+  compaction/retry refresh and receipt provenance;
+- added a real DSH `v0.1.2-alpha.1` Loader/AgentLoop integration gate for the
+  Memory module without changing the scope of the existing plugin modules;
 - refreshed the Libra Agent Bridge v1 fixture and authority receipt for Libra `0.21.22`;
 - hardened bridge environment, UTF-8 frame/result validation, handshake checks, and child crash handling;
 - added durable outbox corruption/path/quota protection and server ack/per-event replay handling;

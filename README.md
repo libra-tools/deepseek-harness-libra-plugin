@@ -18,6 +18,21 @@ When you run DeepSeek Harness with the `libra` profile, the bundle:
 6. Binds workspace leases and actor identity (`deepseek-harness:<session_id>`) so the model cannot forge provenance.
 7. Queries bounded Libra context (`sessions`/`recent_checkpoints`) and renders redacted UI cards for checkpoint/diff/commit/evidence/approval states when the Harness host exposes those capabilities.
 
+### Memory module
+
+The bundle also contains a Libra Memory recall module. On an accepted DSH turn it
+uses the session identity and user query to request an audited prompt section from
+Libra, then attaches that section to the DSH session and model request with its
+receipt and content hashes. Libra remains responsible for selection, policy,
+budgeting, rendering, and receipt persistence.
+
+The Memory module is currently validated against DeepSeek Harness
+`v0.1.2-alpha.1` at commit `cd5ef8148158c3a752a658978873241fdf8e2bbc`
+and Libra Agent Bridge protocol `1.1`. See
+[compatibility/harness-alpha1.md](compatibility/harness-alpha1.md) for this
+module's compatibility receipt. The existing plugin modules and their original
+compatibility documentation remain separate.
+
 ```
 ┌─────────────────────┐     NDJSON JSON-RPC      ┌──────────────────────────┐
 │  DeepSeek Harness   │ ◄──────────────────────► │  libra agent bridge      │
@@ -152,6 +167,7 @@ Real Libra gates require explicit `LIBRA_BINARY` and `LIBRA_REPO`; when either i
 | Tools & approval | [docs/tools.md](docs/tools.md) |
 | Workspace & subagent | [docs/workspace.md](docs/workspace.md) |
 | Context injection | [docs/context.md](docs/context.md) |
+| Memory recall module | [docs/release-evidence-MEM-DSH-01.md](docs/release-evidence-MEM-DSH-01.md) |
 | UI cards | [docs/ui.md](docs/ui.md) |
 | Harness compatibility | [compatibility/harness-rc7.md](compatibility/harness-rc7.md) |
 | Release evidence | [docs/release-evidence-REL-TS-02.md](docs/release-evidence-REL-TS-02.md) |
