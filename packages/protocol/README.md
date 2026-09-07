@@ -19,9 +19,8 @@ When the fixture is present, its adjacent authority receipt is mandatory. The re
 the schema hash plus the recorded Libra source, golden-frame and revision provenance before it
 becomes ready. Libra Rust (`src/internal/ai/agent_bridge/protocol.rs`) remains the protocol
 authority; if the fixture and Rust constants diverge, refresh both files from the fixed Libra
-revision rather than patching TypeScript semantics locally. During the pre-commit development
-phase the bundled receipt is marked `UNRELEASED`; it must be replaced with the landed Libra
-revision before publishing the plugin.
+revision rather than patching TypeScript semantics locally. The current receipt pins
+`a92b29e8fc9ad514ebe2e6c53216845aa059d94f` (Libra `0.21.25`, Bridge `1.2`).
 
 ## Usage
 
@@ -29,6 +28,6 @@ revision before publishing the plugin.
 import { assertSupportedProtocolMajor, loadProtocolReceiver } from "@libra/dsh-protocol";
 
 const receiver = loadProtocolReceiver();
-const contract = assertSupportedProtocolMajor(receiver, { major: 1, minor: 1 });
-console.log(contract.methods.length); // 21, including memory.recall
+const contract = assertSupportedProtocolMajor(receiver, { major: 1, minor: 2 });
+console.log(contract.methods); // includes memory.recall and memory.episode.record
 ```

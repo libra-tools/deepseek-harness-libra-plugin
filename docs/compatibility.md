@@ -1,27 +1,7 @@
-# Compatibility matrix
+# Compatibility
 
-| Surface | Current value | Evidence/state |
-| --- | --- | --- |
-| Libra Agent Bridge | protocol `1.0`, Libra `0.21.22`, revision `b073f078fb67078729fb0a4975294e3ab2dbdefa` | `protocol/agent-bridge.v1.receipt.json` |
-| Protocol source | `protocol.rs` SHA256 `fcf67d190ebf70bb7691ad9bb5f0e1febcff6416cfb5a243e460a4521957c0d5` | receipt; refresh before any authority change |
-| Initialize golden frame | fixture SHA256 `b34ac2e5d9b17af4450508360c671845156a6808ebe491ec9a7036633065f753` | receipt |
-| DeepSeek Harness | `dsh-v0.1.0-rc.7` | external CLI/runtime receipt `remote-pending` |
-| Bundle | `@libra-tools/dsh-bundle@0.1.0` | local build/pack dry-run |
+The current integration uses DSH `v0.1.2-alpha.1` at `cd5ef8148158c3a752a658978873241fdf8e2bbc` and Libra Bridge `1.2` at `a92b29e8fc9ad514ebe2e6c53216845aa059d94f` (Libra `0.21.25`). See the [current compatibility record](../compatibility/harness-alpha1.md) and [protocol authority receipt](../protocol/agent-bridge.v1.receipt.json).
 
-The TypeScript adapter does not update Libra Rust or silently follow a newer DSH
-revision. A protocol or Harness change requires a new receipt, compatibility note,
-focused tests, and a new release plan. Missing external binaries are reported as
-`remote-pending`; fake bridge tests are not release evidence for the real gates.
+Only bundle, bridge-client and protocol remain in the workspace. The current entry provides Memory recall and optional Episode capture. Earlier rc.7, tools, workspace, UI and outbox reports describe historical work; they are not supported-feature claims for this revision.
 
-## Memory module extension
-
-The Memory recall module has an additional validated combination:
-
-| Surface | Memory module value | Evidence/state |
-| --- | --- | --- |
-| Libra Agent Bridge | protocol `1.1`, Libra `0.21.25` development revision | `protocol/agent-bridge.v1.receipt.json` |
-| DeepSeek Harness | `v0.1.2-alpha.1`, commit `cd5ef8148158c3a752a658978873241fdf8e2bbc` | real profile install and Loader/AgentLoop gate |
-| Live model | `deepseek-v4-flash` | `docs/release-evidence-MEM-DSH-01.md` |
-
-This table records the Memory module slice only; it does not replace the plugin's
-existing compatibility record above.
+A DSH or protocol change requires inspecting the new official contract and rerunning the relevant type, runtime and artifact gates. Fake peers test transport or timing and do not substitute for real profile installation, Libra storage or compiler-model evidence.

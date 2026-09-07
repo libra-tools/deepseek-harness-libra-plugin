@@ -1,19 +1,9 @@
-# Privacy and redaction
+# Memory data flow and privacy
 
-The session projection adapter never writes raw prompts, reasoning traces, environment
-variables, or detected secrets to Libra. Payloads are size-checked and scanned for common
-secret patterns before enqueue.
+Recall sends the downstream-accepted user query and DSH session ID to the local Libra bridge. It does not project the whole DSH transcript. Libra applies Memory access, sensitivity, selection and budget policy, then persists a selection receipt before delivery.
 
-When redaction cannot be performed safely, the event is marked `rejected` in the plugin
-outbox and is not sent to `event.append`. There is no fallback that writes the original
-payload.
+When `captureMemoryEpisodes` is enabled, the plugin also sends the final assistant text and turn number after a successful turn. Libra stores canonical history evidence and sends compiler inputs to its configured model provider. Treat enabling capture as consent to this additional storage and provider processing. Tool traces, reasoning blocks and later steering are not captured by this integration.
 
-Outbox files live under the Harness profile storage seam and inherit that directory's
-permissions. They are not written into `.libra/libra.db` or Libra object storage.
+The plugin does not create an event outbox and does not promise to remove secrets from the accepted query or final answer. The old projection/outbox redaction implementation has been removed. Avoid putting secrets in captured inputs; repository and provider policy remain the deployment owner's responsibility.
 
-## Memory module
-
-The Memory module sends the accepted query text and DSH session id to the Libra
-bridge. It does not project the rest of the DSH transcript. Libra applies its own
-Memory access, sensitivity, selector, and budget rules before returning a prompt
-section, and persists the corresponding selection receipt before delivery.
+Memory snapshots and receipt metadata become part of DSH's immutable history. Retiring a snapshot changes the model-visible surface, not the stored history. Capture has no durable retry queue or automatic replay on remount; a settled DSH flush means capture finished or failed observably, not necessarily that a note exists.

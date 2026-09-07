@@ -6,3 +6,5 @@ packages/*/dist/
 .profile-bundle-staging/
 packages/bundle/package.publish.json
 *.tgz
+.dsh-dev
+.dsh-types.json

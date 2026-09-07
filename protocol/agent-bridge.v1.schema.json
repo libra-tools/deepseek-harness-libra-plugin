@@ -1,12 +1,12 @@
 {
-  "protocol_version": { "major": 1, "minor": 1 },
+  "protocol_version": { "major": 1, "minor": 2 },
   "source": "deepseek-harness",
   "jsonrpc_version": "2.0",
   "fixture_provenance": {
     "libra_version": "0.21.25",
     "fixture_origin": "src/internal/ai/agent_bridge/protocol.rs",
     "golden_frames_path": "tests/fixtures/agent_bridge/initialize.ndjson",
-    "authority_revision": "UNRELEASED"
+    "authority_revision": "a92b29e8fc9ad514ebe2e6c53216845aa059d94f"
   },
   "methods": [
     "initialize",
@@ -18,6 +18,7 @@
     "provenance.append",
     "context.get",
     "memory.recall",
+    "memory.episode.record",
     "status.get",
     "diff.get",
     "history.search",

@@ -46,9 +46,10 @@ describe("protocol receiver", () => {
     if (receiver.status !== "ready") {
       return;
     }
-    expect(receiver.contract.protocol_version).toEqual({ major: 1, minor: 1 });
-    expect(receiver.contract.methods).toHaveLength(21);
+    expect(receiver.contract.protocol_version).toEqual({ major: 1, minor: 2 });
+    expect(receiver.contract.methods).toHaveLength(22);
     expect(receiver.contract.methods[8]).toBe("memory.recall");
+    expect(receiver.contract.methods[9]).toBe("memory.episode.record");
     expect(receiver.contract.limits.max_frame_bytes).toBe(256 * 1024);
     expect(receiver.contract.source).toBe("deepseek-harness");
     expect(receiver.contract.error_codes.memory_digest_unavailable).toEqual({

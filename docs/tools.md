@@ -1,17 +1,5 @@
-# Libra tools (model-visible facade)
+# Tools adapter — removed
 
-| Tool | Bridge method | Risk |
-| --- | --- | --- |
-| `libra_context` | `context.get` | read |
-| `libra_status` | `status.get` | read |
-| `libra_diff` | `diff.get` | read |
-| `libra_history_search` | `history.search` | read |
-| `libra_checkpoint` | `checkpoint.list` | read |
-| `libra_checkpoint_create` | `checkpoint.create` | write |
-| `libra_commit` | `commit.create` | write |
-| `libra_review` | `review.run` | write |
-| `libra_restore_checkpoint` | `checkpoint.restore` | restore |
+The old `packages/tools` adapter was not wired into the current bundle entry and has been removed in the Cordis-native refactor. Its former interfaces are not a supported runtime surface. Historical implementation reports remain dated; they are not current feature documentation.
 
-Tool results are a single object: `{ schema_version, operation_id, status, data?, error?, warnings? }`.
-
-Write and restore tools require Harness approval policy to enable.
+See the [current integration](../README.md) and [profile setup](profile.md) for Memory recall and optional Episode capture. DSH retains ownership of its native agent, approval, workspace and UI behavior.

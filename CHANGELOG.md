@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased — REL-TS-02 implementation slice (2026-08-24)
+## Unreleased — Cordis-native refactor (2026-09-07)
+
+- Removed the unused session/outbox, tools, workspace, context and UI packages and their fake-host tests. They were not connected to the current bundle entry; no replacement tools or UI surface is claimed.
+- Replaced handwritten DSH Host declarations with types built from the pinned `v0.1.2-alpha.1` checkout. Retained only plugin-owned Memory source augmentation.
+- Split configuration, delivery validation and Memory lifecycle state behind the existing Cordis entry. A single disposer drains bridge work before close and leaves live DSH Sessions intact across reload.
+- Added real Loader/Session/AgentLoop coverage for admission, cancellation, replacement/retry, capture flush, delayed unload, session reuse and mount isolation.
+- Pinned the Bridge 1.2 authority receipt to Libra `a92b29e8fc9ad514ebe2e6c53216845aa059d94f`; corrected current setup, privacy and compatibility documentation.
+
+Package version remains `0.1.0`; this entry does not announce npm publication. Earlier entries below are historical implementation records, not the current feature list.
+
+## Historical — REL-TS-02 implementation slice (2026-08-24)
 
 - added an optional Libra Memory recall module for accepted DSH turns, including
   compaction/retry refresh and receipt provenance;

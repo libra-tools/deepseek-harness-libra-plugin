@@ -48,58 +48,7 @@ importers:
         specifier: workspace:*
         version: link:../bridge-client
 
-  packages/context:
-    dependencies:
-      '@libra/dsh-bridge-client':
-        specifier: workspace:*
-        version: link:../bridge-client
-      '@libra/dsh-session':
-        specifier: workspace:*
-        version: link:../session
-      '@libra/dsh-tools':
-        specifier: workspace:*
-        version: link:../tools
-
   packages/protocol: {}
-
-  packages/session:
-    dependencies:
-      '@libra/dsh-bridge-client':
-        specifier: workspace:*
-        version: link:../bridge-client
-      '@libra/dsh-protocol':
-        specifier: workspace:*
-        version: link:../protocol
-
-  packages/tools:
-    dependencies:
-      '@libra/dsh-bridge-client':
-        specifier: workspace:*
-        version: link:../bridge-client
-      '@libra/dsh-protocol':
-        specifier: workspace:*
-        version: link:../protocol
-
-  packages/ui:
-    dependencies:
-      '@libra/dsh-bridge-client':
-        specifier: workspace:*
-        version: link:../bridge-client
-      '@libra/dsh-session':
-        specifier: workspace:*
-        version: link:../session
-      '@libra/dsh-tools':
-        specifier: workspace:*
-        version: link:../tools
-      '@libra/dsh-workspace':
-        specifier: workspace:*
-        version: link:../workspace
-
-  packages/workspace:
-    dependencies:
-      '@libra/dsh-bridge-client':
-        specifier: workspace:*
-        version: link:../bridge-client
 
 packages:
 

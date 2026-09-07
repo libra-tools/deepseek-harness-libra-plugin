@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,6 +20,7 @@ await build({
     "@deepseek-ai/dsh-agent",
     "@deepseek-ai/dsh-llm",
     "@deepseek-ai/dsh-session",
+    "@deepseek-ai/schemastery",
   ],
   sourcemap: true,
 });
@@ -28,6 +29,13 @@ if (!existsSync(protocolSource)) {
   throw new Error("protocol fixture directory is missing; cannot build a self-contained bundle");
 }
 cpSync(protocolSource, protocolTarget, { recursive: true });
+// Ship only the public declaration closure, not internal bridge-client types.
+for (const file of ["index.d.ts", "config.d.ts", "memory-source.d.ts"]) {
+  cpSync(join(root, "packages/bundle/lib", file), join(root, "packages/bundle/dist", file));
+}
+for (const file of ["memory.d.ts", "memory-delivery.d.ts"]) {
+  rmSync(join(root, "packages/bundle/dist", file), { force: true });
+}
 
 const publishable = {
   ...pkg,

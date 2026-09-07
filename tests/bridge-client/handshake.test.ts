@@ -40,7 +40,7 @@ describe("bridge-client handshake", () => {
   it("negotiates initialize protocol_version and capabilities", async () => {
     client = makeClient();
     const init = await client.connect();
-    expect(init.protocol).toEqual({ major: 1, minor: 1 });
+    expect(init.protocol).toEqual({ major: 1, minor: 2 });
     expect(init.source).toBe("deepseek-harness");
     expect(init.methods).toContain("session.open");
     expect(init.methods).toContain("memory.recall");
