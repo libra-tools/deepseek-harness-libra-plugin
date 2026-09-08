@@ -1,12 +1,30 @@
 # DeepSeek Harness Libra Plugin
 
-`@libra-tools/dsh-bundle` connects [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) to Libra through `libra agent bridge --stdio` (JSON-RPC over NDJSON).
+`@libra-tools/dsh-bundle` is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) profile plugin that connects Harness sessions to [Libra](https://github.com/libra-tools/libra) through a typed JSON-RPC NDJSON bridge (`libra agent bridge --stdio`).
 
-DSH owns the agent loop, Sessions, persistence, and approvals. Libra owns repository evidence, Memory generation, selection policy, and storage. The plugin contains the Cordis entry and bridge client; it does not open Libra's database or implement a second Harness runtime.
+Harness owns the agent loop, session persistence, and approval policy. Libra owns repository state, durable evidence, and storage policy. This plugin is the TypeScript client and Cordis bundle between them—it does not read Libra's database or implement a second Harness runtime.
 
-The current entry integrates Memory recall and optional Episode capture. The old tools, UI, workspace, context-adapter and event-outbox packages were not connected to this entry and have been removed. This is an unreleased refactor of the existing Libra integration bundle, not a new npm release.
+**Package:** `@libra-tools/dsh-bundle` · **Harness pin:** `v0.1.2-alpha.1` · **Libra bridge:** `1.2`
 
-## Supported development combination
+## What it does
+
+When loaded into a Harness profile, the bundle:
+
+1. Registers the Cordis entry `libra` using Harness's native agent and session services.
+2. Starts the configured `libra agent bridge --stdio` process with fixed arguments.
+3. Negotiates the bridge protocol and routes requests through typed, allowlisted methods.
+4. Connects supported Libra capabilities to the Harness lifecycle, preserving session identity and receipt provenance.
+5. Drains pending requests and closes the bridge when the plugin is unloaded, without closing live Harness sessions.
+
+### Current capabilities
+
+Memory recall and optional Episode capture are the capabilities connected in this revision. Recall supplies a validated, receipt-backed prompt section for an accepted turn; opt-in capture sends the accepted query and final answer to Libra for generation and storage.
+
+Capture is best-effort and can incur a compiler model request per successful turn. It requires an existing repository code commit and has no durable retry queue. See [Memory integration](docs/memory-episodes.md) for behavior, data flow, and testing.
+
+The bundle does not currently expose model-visible tools, workspace leases, UI cards, or a transcript outbox. The earlier unmounted adapters have been removed; historical reports are not current feature claims.
+
+## Requirements
 
 | Component | Pin |
 | --- | --- |
@@ -17,17 +35,11 @@ The current entry integrates Memory recall and optional Episode capture. The old
 
 DSH supplies the Cordis, Schemastery, Agent, Session and LLM peers. They are not embedded in the bundle. Older rc.7 reports are historical, not compatibility claims for this source tree. See [compatibility](compatibility/harness-alpha1.md).
 
-## Runtime behavior
+## Install
 
-- Before an admitted turn, use the downstream-accepted user query to request Libra Memory. Rejected or cancelled steps do not recall.
-- Validate the delivery envelope and exact text hash, then attach the same identified message to DSH history and the model request, with receipt provenance.
-- Refresh after a surface replacement or an overflow-recovery replacement. Empty or null delivery retires the previous visible snapshot without deleting durable history.
-- With `captureMemoryEpisodes: true`, send the accepted query and final assistant text after a completed turn. Libra records canonical evidence and runs its Episode compiler and writer. The next recall and DSH's `session/flush` wait for capture settlement.
-- Cordis owns subscriptions and one ordered cleanup: stop accepting work, drain pending bridge requests, then close the process. Plugin unload does not close live DSH Sessions. Actual Session disposal retires its bridge session, including before an ID is reused.
+### From this monorepo (development)
 
-Capture is best-effort: a warning and settled flush do not prove an Episode was stored. It adds a compiler model request per successful turn, requires an existing repository code commit, and has no durable retry queue. Failed, aborted, blocked and truncated turns are skipped. Tool traces, later steering and historical replay are not captured. See [Memory capture and algorithm testing](docs/memory-episodes.md).
-
-## Build and install a development tarball
+This revision is an unreleased update to the existing bundle. Build a development tarball to use the source documented here; no new npm release is claimed.
 
 The repository root and `packages/bundle` workspace manifest are not standalone install targets. Prepare an installed checkout of the exact DSH pin, then build the self-contained artifact:
 
@@ -44,25 +56,29 @@ Configure the inserted `libra` entry with deployment-owned paths:
 ```json
 {
   "libraExecutable": "/absolute/path/to/libra",
-  "repositoryRoot": "/absolute/path/to/libra-repository",
-  "captureMemoryEpisodes": false,
-  "memoryModel": "deepseek-chat"
+  "repositoryRoot": "/absolute/path/to/libra-repository"
 }
 ```
 
 `LIBRA_BINARY` and `LIBRA_REPO` are path fallbacks. The executable must be an executable file at an absolute path; no PATH lookup or model-supplied command is accepted. Initialize the target repository with Libra first. Opt-in capture uses `DEEPSEEK_API_KEY` or Libra's normal repository credential configuration. See [profile setup](docs/profile.md).
 
-## Source layout
+## Monorepo packages
+
+The installable artifact is `@libra-tools/dsh-bundle`. Internal packages are compiled into its `dist/` bundle; Harness peers remain host-provided.
 
 | Package | Responsibility |
 | --- | --- |
-| `packages/bundle` | `Config/inject/apply`, Memory hooks, per-mount state and cleanup |
+| `packages/bundle` | Cordis entry, capability hooks, per-mount state and cleanup |
 | `packages/bridge-client` | Framed transport, handshake, deadlines and child process ownership |
 | `packages/protocol` | Versioned receiver schema and allowed bridge method definitions |
 
 The bundle entry injects the real `agents` and `sessions` services. Type checking uses declarations built from the pinned DSH checkout; `.dsh-types.json` and `.dsh-dev` are ignored development artifacts. The only DSH module augmentation adds plugin-owned Memory source variants. There is no hand-maintained Host interface shim.
 
-## Verification
+## Development
+
+Prepare the pinned Harness declarations as shown above before running checks.
+
+### Verification matrix
 
 ```sh
 pnpm check
@@ -75,10 +91,30 @@ The lifecycle gate runs the built bundle through real Cordis, Loader, Session an
 
 `scripts/test-integration.mjs` separately packs the bundle, installs it into a fresh profile, checks composition, runs the installed artifact through Loader/AgentLoop, and verifies its persisted receipt. `scripts/test-memory-episodes.mjs` uses the real compiler model for generation → storage → remount → recall. Exact inputs and the distinction between deterministic and paid model checks are documented in [Memory testing](docs/memory-episodes.md).
 
-## Security and protocol
+## Security and privacy defaults
 
-All runtime access to Libra goes through the bridge. There is no current model-visible tools facade, workspace lease adapter, UI projection or transcript outbox. Recall sends the accepted query; opt-in capture also sends the final answer. Do not assume the removed outbox's redaction behavior applies to these inputs. Libra enforces its Memory policy and persists selection receipts.
+- **Bridge-only:** TypeScript does not access Libra's database or object store directly.
+- **Deployment-owned configuration:** executable and repository paths cannot be supplied by the model.
+- **Validated delivery:** protocol checks, bounded frames, and content hashes protect the transport and prompt delivery boundary.
+- **Explicit capture:** additional generation and storage are disabled by default. The plugin does not promise secret redaction of query or answer text.
+
+Harness retains approval ownership; Libra enforces repository access and selection policy. See [security](docs/security.md) and [privacy](docs/privacy.md).
+
+## Protocol authority
 
 The authority receipt pins Libra's actual protocol source and initialize fixture. The transport uses one JSON object per line, bounded UTF-8 frames, negotiated methods and deadlines. See [protocol](docs/protocol/agent-bridge-v1.md), [security](docs/security.md), and [privacy](docs/privacy.md).
+
+## Documentation
+
+| Topic | Path |
+| --- | --- |
+| Profile setup | [docs/profile.md](docs/profile.md) |
+| Compatibility | [docs/compatibility.md](docs/compatibility.md) |
+| Bridge protocol | [docs/protocol/agent-bridge-v1.md](docs/protocol/agent-bridge-v1.md) |
+| Security and privacy | [docs/security.md](docs/security.md), [docs/privacy.md](docs/privacy.md) |
+| Memory integration | [docs/memory-episodes.md](docs/memory-episodes.md) |
+| Current validation evidence | [docs/release-evidence-CORDIS-20260907.md](docs/release-evidence-CORDIS-20260907.md) |
+
+## License
 
 MIT — see [LICENSE](LICENSE).

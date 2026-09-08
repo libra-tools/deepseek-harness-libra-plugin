@@ -1,4 +1,15 @@
-# Testing Libra Memory algorithms with DSH
+# Libra Memory integration
+
+Memory is one capability of the Libra profile plugin. Harness owns the turn lifecycle; Libra owns selection, generation, and durable storage. The bundle delivers recall results and optionally captures completed turns through the bridge.
+
+## Recall and lifecycle
+
+- Recall uses the downstream-accepted user query before an admitted turn. Rejected or cancelled steps do not recall.
+- The plugin validates the delivery envelope and exact text hash, then attaches the same identified message to Harness history and the model request with receipt provenance.
+- Surface replacement and overflow recovery refresh the delivery. Empty or null results retire the previous visible snapshot without deleting durable history.
+- Cordis unload drains pending work and closes the bridge without closing live Harness sessions. Session disposal retires the corresponding bridge session before its ID can be reused.
+
+## Optional Episode capture
 
 Enable the optional module on the Cordis bundle entry:
 
@@ -25,6 +36,8 @@ The structured Memory note is stored as a repository object. `.libra/libra.db`
 holds its note/revision indexes, live head, search document and FTS postings,
 compile job state, and context selection receipts. Search projections are not a
 replacement for the canonical Memory note.
+
+Capture is best-effort and can incur a compiler model request per successful turn. Failed, aborted, blocked, and truncated turns are skipped; tool traces, later steering, and historical replay are not captured. There is no durable retry queue. The next recall and Harness's `session/flush` wait for capture settlement, but a settled flush does not guarantee a stored note. See [privacy](privacy.md) for storage and provider-processing boundaries.
 
 ## Reproducible generation gate
 
