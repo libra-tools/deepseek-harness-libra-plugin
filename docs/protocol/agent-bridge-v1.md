@@ -66,7 +66,12 @@ requires this matching turn anchor and reads the terminal HEAD server-side.
 Enable generation at bridge startup
 with `LIBRA_DSH_MEMORY_MODEL`; model credentials resolve through Libra's normal
 DeepSeek provider configuration. The bundle sets this variable when
-`captureMemoryEpisodes` is enabled and allows 180 seconds for bridge requests.
+`captureMemoryEpisodes` is enabled. The client imposes no total-duration cap on
+`memory.episode.record`: Libra must enforce inactivity using its model stream
+(60 seconds without nonempty thinking/text output in the matching update).
+Other requests retain the 30-second client timeout. Child exit and explicit
+close continue to cancel pending requests. Older servers retain their own
+hard request deadline; this client change cannot override it.
 Recording is not idempotent across manual retries; do not replay a completed
 record request as an automatic transport retry.
 

@@ -180,6 +180,29 @@ describe("bridge-client handshake", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(50);
   });
 
+  it("delegates Episode inactivity to Libra without imposing a total duration cap", async () => {
+    client = new BridgeClient({
+      executable: wrapper,
+      cwd: repoRoot,
+      env: { PATH: process.env.PATH ?? "" },
+      requestTimeoutMs: 250,
+    });
+    await client.connect();
+    const result = await client.requestMethod("memory.episode.record", { kind: "delay", delay_ms: 500 });
+    expect(result.state).toBe("success");
+    expect((await client.requestMethod("status.get")).state).toBe("success");
+  });
+
+  it("closing cancels an Episode request without a client timer", async () => {
+    client = makeClient();
+    await client.connect();
+    const pending = client.requestMethod("memory.episode.record", { kind: "delay", delay_ms: 5_000 });
+    const rejected = expect(pending).rejects.toBeInstanceOf(BridgeClientError);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await client.close();
+    await rejected;
+  });
+
   it("terminates the transport after a request timeout", async () => {
     client = new BridgeClient({
       executable: wrapper,

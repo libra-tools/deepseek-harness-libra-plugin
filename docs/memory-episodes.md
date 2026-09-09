@@ -94,5 +94,9 @@ turns on remount. There is no durable capture retry queue; a failed capture is
 reported as a warning (subject to DSH's exporter levels), and manually resubmitting a record can create another
 Episode. Only the accepted query and final assistant text are generation inputs.
 Canonical history timestamps describe Libra ingestion; full DSH turn timing is
-not projected yet. The bridge's current 30-second request deadline also applies
-to generation, even though the client allows extra time for the request.
+not projected yet. Episode generation has no client total-duration cap. With
+the matching Libra inactivity-watchdog update, 60 seconds without nonempty
+thinking or text output ends the request; ongoing output renews that timer.
+Older Libra builds still enforce their own hard server deadline. Other bridge
+methods retain the 30-second client deadline. Closing the plugin or a bridge
+child exit still rejects pending generation requests.

@@ -9,7 +9,7 @@ const limits = {
   max_batch_bytes: 262144, max_event_bytes: 262144, max_result_bytes: 262144,
   max_page: 100, request_deadline_secs: 30,
 };
-const methods = ["initialize", "session.open", "memory.recall", "status.get"];
+const methods = ["initialize", "session.open", "memory.recall", "memory.episode.record", "status.get"];
 const writeResponse = (payload) => process.stdout.write(JSON.stringify(payload) + "\n");
 if (process.env.LIBRA_SKIP_WEB_BUILD?.includes("close-delay")) {
   process.on("SIGTERM", () => { setTimeout(() => process.exit(0), 75); });

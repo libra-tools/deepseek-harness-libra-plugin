@@ -41,7 +41,7 @@ export class BridgeClientError extends Error {
 interface PendingWaiter {
   resolve: (response: JsonRpcResponse) => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 interface InternalState {
@@ -360,7 +360,10 @@ export class BridgeClient {
     }
 
     return new Promise<JsonRpcResponse>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      // Libra observes the private model stream and enforces its inactivity
+      // watchdog. A client wall-clock cap would abort healthy long reasoning.
+      // Child exit, explicit close and write failures still reject the waiter.
+      const timer = method === "memory.episode.record" ? undefined : setTimeout(() => {
         state.requests.set(key, {
           id,
           method,
