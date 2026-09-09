@@ -97,6 +97,7 @@ Canonical history timestamps describe Libra ingestion; full DSH turn timing is
 not projected yet. Episode generation has no client total-duration cap. With
 the matching Libra inactivity-watchdog update, 60 seconds without nonempty
 thinking or text output ends the request; ongoing output renews that timer.
-Older Libra builds still enforce their own hard server deadline. Other bridge
-methods retain the 30-second client deadline. Closing the plugin or a bridge
+Older Libra builds still enforce their own hard server deadline. No bridge
+method has a client total-duration cap after initialization. A silent initial
+handshake is bounded to 60 seconds by default. Closing the plugin or a bridge
 child exit still rejects pending generation requests.

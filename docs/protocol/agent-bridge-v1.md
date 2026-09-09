@@ -4,7 +4,7 @@
 
 - One JSON-RPC 2.0 object per NDJSON line on stdout.
 - Diagnostics only on stderr; stdout pollution is a protocol violation.
-- Default request deadline: 30 seconds.
+- Default server inactivity window: 60 seconds; useful progress renews it.
 - Frame cap: 256 KiB per line; result and event limits are also checked as UTF-8 bytes.
 
 ## Handshake (`initialize`)
@@ -69,8 +69,10 @@ DeepSeek provider configuration. The bundle sets this variable when
 `captureMemoryEpisodes` is enabled. The client imposes no total-duration cap on
 `memory.episode.record`: Libra must enforce inactivity using its model stream
 (60 seconds without nonempty thinking/text output in the matching update).
-Other requests retain the 30-second client timeout. Child exit and explicit
-close continue to cancel pending requests. Older servers retain their own
+All methods delegate inactivity handling to Libra after initialization; the
+initial handshake has a 60-second silence limit. The legacy server field
+`request_deadline_secs` describes the inactivity window in the matching update.
+Child exit and explicit close continue to cancel pending requests. Older servers retain their own
 hard request deadline; this client change cannot override it.
 Recording is not idempotent across manual retries; do not replay a completed
 record request as an automatic transport retry.

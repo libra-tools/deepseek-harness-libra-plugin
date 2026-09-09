@@ -18,6 +18,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const frame = JSON.parse(line);
   const id = frame.id;
   if (frame.method === "initialize") {
+    if (process.env.LIBRA_SKIP_WEB_BUILD?.includes("initialize-stall")) return;
     if (process.env.LIBRA_SKIP_WEB_BUILD?.includes("stderr-flood")) process.stderr.write(Buffer.alloc(1024 * 1024, "x"));
     writeResponse({ jsonrpc: "2.0", id, result: { protocol: { major: 1, minor: 2 }, limits, methods, source: "deepseek-harness" } });
     return;

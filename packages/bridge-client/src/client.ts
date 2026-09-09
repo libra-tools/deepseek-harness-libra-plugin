@@ -363,7 +363,7 @@ export class BridgeClient {
       // Libra observes the private model stream and enforces its inactivity
       // watchdog. A client wall-clock cap would abort healthy long reasoning.
       // Child exit, explicit close and write failures still reject the waiter.
-      const timer = method === "memory.episode.record" ? undefined : setTimeout(() => {
+      const timer = method !== "initialize" ? undefined : setTimeout(() => {
         state.requests.set(key, {
           id,
           method,
@@ -374,7 +374,7 @@ export class BridgeClient {
           state,
           new BridgeClientError("request_timeout", `request ${method} timed out`),
         );
-      }, this.config.requestTimeoutMs ?? 30_000);
+      }, this.config.requestTimeoutMs ?? 60_000);
 
       state.pendingById.set(key, { resolve, reject, timer });
 

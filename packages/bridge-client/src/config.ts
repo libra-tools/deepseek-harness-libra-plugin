@@ -56,6 +56,6 @@ export function normalizeBridgeConfig(config: BridgeClientConfig): BridgeClientC
     ...config,
     args: BRIDGE_FIXED_ARGS,
     env,
-    requestTimeoutMs: config.requestTimeoutMs ?? 30_000,
+    requestTimeoutMs: config.requestTimeoutMs ?? 60_000,
   };
 }

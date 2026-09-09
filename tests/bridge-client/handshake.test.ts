@@ -188,8 +188,10 @@ describe("bridge-client handshake", () => {
       requestTimeoutMs: 250,
     });
     await client.connect();
-    const result = await client.requestMethod("memory.episode.record", { kind: "delay", delay_ms: 500 });
-    expect(result.state).toBe("success");
+    for (const method of ["memory.episode.record", "status.get"]) {
+      const result = await client.requestMethod(method, { kind: "delay", delay_ms: 500 });
+      expect(result.state).toBe("success");
+    }
     expect((await client.requestMethod("status.get")).state).toBe("success");
   });
 
@@ -203,16 +205,14 @@ describe("bridge-client handshake", () => {
     await rejected;
   });
 
-  it("terminates the transport after a request timeout", async () => {
+  it("terminates a bridge that never answers the initial handshake", async () => {
     client = new BridgeClient({
       executable: wrapper,
       cwd: repoRoot,
-      env: { PATH: process.env.PATH ?? "" },
+      env: { PATH: process.env.PATH ?? "", LIBRA_SKIP_WEB_BUILD: "initialize-stall" },
       requestTimeoutMs: 250,
     });
-    await client.connect();
-
-    await expect(client.requestMethod("status.get", { kind: "delay", delay_ms: 1_000 }))
+    await expect(client.connect())
       .rejects.toMatchObject({ code: "request_timeout" });
     await expect(client.requestMethod("status.get"))
       .rejects.toMatchObject({ code: "not_connected" });

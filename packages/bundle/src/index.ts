@@ -14,7 +14,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const bridge = new BridgeClient({
     executable: resolved.libraExecutable,
     cwd: resolved.repositoryRoot,
-    requestTimeoutMs: 30_000,
+    requestTimeoutMs: 60_000,
     env: {
       PATH: process.env.PATH ?? "",
       LIBRA_SKIP_WEB_BUILD: "1",
