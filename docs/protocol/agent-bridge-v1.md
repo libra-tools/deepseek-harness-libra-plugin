@@ -4,7 +4,7 @@
 
 - One JSON-RPC 2.0 object per NDJSON line on stdout.
 - Diagnostics only on stderr; stdout pollution is a protocol violation.
-- Default request deadline: 30 seconds.
+- Default server inactivity window: 60 seconds; useful progress renews it.
 - Frame cap: 256 KiB per line; result and event limits are also checked as UTF-8 bytes.
 
 ## Handshake (`initialize`)
@@ -37,17 +37,47 @@ The TypeScript client only spawns a configured `libra` executable with argv
 `agent bridge --stdio`. Model-provided executables or argv are rejected at
 configuration normalization.
 
-## Event ingress and outbox (TS-03)
+## Current entry and protocol authority
 
-Harness session events are batched by `(session_id, event_seq)` and sent through
-`event.append`. The plugin keeps a bounded, owner-only outbox under the Harness profile
-storage seam; `last_acked_seq` and `per_event` statuses drive durable state. Accepted or
-duplicate events are pruned, while conflict/rejected events remain bounded diagnostics.
-Duplicate `(session_id, event_seq)` with the same digest is a successful replay; digest
-conflicts are fail-closed. All frame, event, result, batch, outbox, and context limits use
-UTF-8 encoded byte counts.
+The receiver fixture records Bridge `1.2` from Libra
+`a92b29e8fc9ad514ebe2e6c53216845aa059d94f`. The current bundle calls session
+open/close, Memory recall, and opt-in Episode record. Other methods remain in
+the protocol fixture because they are bridge capabilities, not because this
+bundle exposes them as model tools. The previous transcript outbox was removed;
+the bundle does not call wire `event.append` or `session.flush`.
 
-## Memory module extension (`1.1`)
+DSH's `session/flush` hook is a different interface: the plugin waits for its
+pending Episode capture through that native hook.
+
+## Memory Episode generation extension (`1.2`)
+
+The additive `memory.episode.record` method accepts only
+`{session_id, turn, goal, response_text}`. It requires the same process-active,
+repository-scoped session as recall. The opt-in bundle forwards the accepted
+query and final assistant text from a successful DSH `turn/end` event.
+Libra owns the compiler model, canonical history evidence, policy, admission,
+and SQLite projections; callers cannot supply a Memory note or code revision.
+
+Success returns `{schema_version: 1, data: {task_id, note_id, revision_oid}}`
+after the generated Episode has been persisted. When capture is enabled, the
+bundle adds the optional positive `turn` field to `memory.recall`; Libra freezes
+the starting HEAD once for that turn (including compaction refreshes). Recording
+requires this matching turn anchor and reads the terminal HEAD server-side.
+Enable generation at bridge startup
+with `LIBRA_DSH_MEMORY_MODEL`; model credentials resolve through Libra's normal
+DeepSeek provider configuration. The bundle sets this variable when
+`captureMemoryEpisodes` is enabled. The client imposes no total-duration cap on
+`memory.episode.record`: Libra must enforce inactivity using its model stream
+(60 seconds without nonempty thinking/text output in the matching update).
+All methods delegate inactivity handling to Libra after initialization; the
+initial handshake has a 60-second silence limit. The legacy server field
+`request_deadline_secs` describes the inactivity window in the matching update.
+Child exit and explicit close continue to cancel pending requests. Older servers retain their own
+hard request deadline; this client change cannot override it.
+Recording is not idempotent across manual retries; do not replay a completed
+record request as an automatic transport retry.
+
+## Memory recall extension (`1.1`)
 
 Protocol minor `1.1` adds `memory.recall` without changing the existing v1
 methods. The plugin discovers the method through the `initialize.methods` list.

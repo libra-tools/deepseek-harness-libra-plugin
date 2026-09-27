@@ -1,9 +1,7 @@
-# Harness UI cards
+# Harness UI
 
-Cards expose bounded, redacted summaries for checkpoint, diff, commit, evidence, and approval states.
-Commit/restore routes through the tools facade and the server-side Libra approval gate; the UI
-approval action only records the operation decision that is sent with the subsequent mutation.
-When the DSH UI capability is missing, card publication is reported as a warning rather than a
-local ready state.
+## Current support
 
-Actions carry `operation_id` for idempotent routing.
+The old `packages/ui` adapter was not wired into the current bundle entry and has been removed in the Cordis-native refactor. Its former interfaces are not a supported runtime surface. Historical implementation reports remain dated; they are not current feature documentation.
+
+See the [plugin overview](../README.md) and [profile setup](profile.md) for currently connected capabilities. DSH retains ownership of its native agent, approval, workspace and UI behavior.

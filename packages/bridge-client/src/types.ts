@@ -44,6 +44,7 @@ export interface BridgeClientConfig {
   cwd: string;
   /** Environment allowlist merged onto a minimal safe baseline. */
   env?: Record<string, string>;
+  /** Initial handshake inactivity limit only; subsequent requests use Libra's watchdog. */
   requestTimeoutMs?: number;
   libraBinary?: string;
 }

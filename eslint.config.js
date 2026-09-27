@@ -23,6 +23,6 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ["**/lib/**", "**/node_modules/**", "**/dist/**", "pnpm-lock.yaml", "eslint.config.js", ".profile-bundle-staging/**"],
+    ignores: ["**/lib/**", "**/node_modules/**", "**/dist/**", "pnpm-lock.yaml", "eslint.config.js", ".profile-bundle-staging/**", ".dsh-dev/**"],
   },
 );

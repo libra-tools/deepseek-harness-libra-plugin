@@ -20,8 +20,12 @@ if (protocolMajor && protocolMajor !== "1") {
   console.error(`unsupported protocol major ${protocolMajor}`);
   process.exit(1);
 }
-if (!protocolMajor && !libraRelease && !args.includes("--events") && !args.includes("--tools") && !args.includes("--workspace")) {
-  console.error("test:contract requires --protocol-version <major> or a named contract gate");
+if (args.some((arg) => ["--events", "--tools", "--workspace"].includes(arg))) {
+  console.error("The unmounted event/tools/workspace facades were removed; use the real DSH integration gate");
+  process.exit(1);
+}
+if (!protocolMajor && !libraRelease) {
+  console.error("test:contract requires --protocol-version <major> or --libra-release <release>");
   process.exit(1);
 }
 
@@ -32,16 +36,7 @@ if (libraRelease) {
     console.error(`remote-pending: Libra release ${libraRelease} requires LIBRA_BINARY and LIBRA_REPO`);
     process.exit(2);
   }
-  requested.push(["tests/bridge-client/libra-handshake.test.ts", "tests/bridge-client/libra-contract-flow.test.ts"]);
-}
-if (args.includes("--events")) {
-  requested.push(["tests/session"]);
-}
-if (args.includes("--tools")) {
-  requested.push(["tests/tools"]);
-}
-if (args.includes("--workspace")) {
-  requested.push(["tests/workspace"]);
+  requested.push(["tests/bridge-client/libra-handshake.test.ts"]);
 }
 if (protocolMajor) {
   requested.push(["tests/protocol", "tests/bridge-client"]);

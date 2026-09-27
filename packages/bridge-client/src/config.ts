@@ -44,7 +44,8 @@ export function normalizeBridgeConfig(config: BridgeClientConfig): BridgeClientC
   }
   if (config.env) {
     for (const [key, value] of Object.entries(config.env)) {
-      if (!DEFAULT_ENV_ALLOWLIST.includes(key as typeof DEFAULT_ENV_ALLOWLIST[number])) {
+      if (!DEFAULT_ENV_ALLOWLIST.includes(key as typeof DEFAULT_ENV_ALLOWLIST[number])
+        && key !== "LIBRA_DSH_MEMORY_MODEL" && key !== "DEEPSEEK_API_KEY") {
         throw new BridgeConfigError(`environment key ${key} is not in the bridge allowlist`);
       }
       env[key] = value;
@@ -55,6 +56,6 @@ export function normalizeBridgeConfig(config: BridgeClientConfig): BridgeClientC
     ...config,
     args: BRIDGE_FIXED_ARGS,
     env,
-    requestTimeoutMs: config.requestTimeoutMs ?? 30_000,
+    requestTimeoutMs: config.requestTimeoutMs ?? 60_000,
   };
 }

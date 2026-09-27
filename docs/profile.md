@@ -1,27 +1,36 @@
 # Libra profile setup
 
-```bash
-DSH_CLI="/absolute/path/to/pinned/dsh-v0.1.0-rc.7"
-"$DSH_CLI" plugin --profile libra add file:/tmp/libra-dsh-bundle-<run>
-"$DSH_CLI" --profile libra --dump-config
-```
+Use DSH `v0.1.2-alpha.1` at `cd5ef8148158c3a752a658978873241fdf8e2bbc`. Build and pack the workspace as described in the [README](../README.md), then install the tarball:
 
-The `libra` profile installs `@libra-tools/dsh-bundle`, which registers the Cordis layer `libra`. The bundle starts `libra agent bridge --stdio` after a pinned DSH host supplies the lifecycle adapter; without that host capability it reports `degraded-no-host`.
-
-Required: Libra repository initialized (`libra init`) and Libra binary on PATH or configured explicitly.
-
-## Memory module development profile
-
-The Memory module is validated separately with DSH `v0.1.2-alpha.1`. Build and
-pack the workspace bundle, then install the tarball into a DSH profile:
-
-```bash
-pnpm build
-pnpm pack:bundle
+```sh
 dsh plugin --profile headless add /absolute/path/to/libra-tools-dsh-bundle-0.1.0.tgz
+dsh --profile headless --dump-config
 ```
 
-Configure `libraExecutable` with an absolute path to a Libra binary that advertises
-Agent Bridge protocol `1.1`, and set `repositoryRoot` to an initialized Libra
-repository. The plugin can also read these values from `LIBRA_BINARY` and
-`LIBRA_REPO`.
+The bundle patch inserts an entry with ID `libra` and name `@libra-tools/dsh-bundle`. Harness supplies its native `agents` and `sessions` services; missing required services prevent Cordis from activating the entry.
+
+## Bridge configuration
+
+Set the executable and repository paths in the inserted `libra` entry. These are deployment settings, not model-controlled parameters.
+
+| Config | Meaning |
+| --- | --- |
+| `libraExecutable` | Absolute executable path; fallback `LIBRA_BINARY` |
+| `repositoryRoot` | Existing directory; fallback `LIBRA_REPO`, then current directory |
+
+Use a Libra-initialized repository and the [pinned Bridge 1.2 build](../compatibility/harness-alpha1.md).
+
+## Optional capability settings
+
+Recall is active when the bundle is loaded. Episode capture is disabled by default:
+
+| Config | Meaning |
+| --- | --- |
+| `captureMemoryEpisodes` | Defaults to `false`; opt in to compiler calls and generation input storage |
+| `memoryModel` | Libra compiler model; defaults to `deepseek-chat` |
+
+Capture also needs an existing code commit and provider credentials. See [Memory integration](memory-episodes.md) for setup, behavior, and costs.
+
+## Verify installation
+
+`--dump-config` proves composition only. The integration gate runs the installed artifact and checks its database receipt. See [Memory testing](memory-episodes.md). The current development tarball has not been published to npm.

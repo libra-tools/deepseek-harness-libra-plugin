@@ -40,7 +40,7 @@ describe("bridge-client handshake", () => {
   it("negotiates initialize protocol_version and capabilities", async () => {
     client = makeClient();
     const init = await client.connect();
-    expect(init.protocol).toEqual({ major: 1, minor: 1 });
+    expect(init.protocol).toEqual({ major: 1, minor: 2 });
     expect(init.source).toBe("deepseek-harness");
     expect(init.methods).toContain("session.open");
     expect(init.methods).toContain("memory.recall");
@@ -180,7 +180,7 @@ describe("bridge-client handshake", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(50);
   });
 
-  it("terminates the transport after a request timeout", async () => {
+  it("delegates Episode inactivity to Libra without imposing a total duration cap", async () => {
     client = new BridgeClient({
       executable: wrapper,
       cwd: repoRoot,
@@ -188,8 +188,31 @@ describe("bridge-client handshake", () => {
       requestTimeoutMs: 250,
     });
     await client.connect();
+    for (const method of ["memory.episode.record", "status.get"]) {
+      const result = await client.requestMethod(method, { kind: "delay", delay_ms: 500 });
+      expect(result.state).toBe("success");
+    }
+    expect((await client.requestMethod("status.get")).state).toBe("success");
+  });
 
-    await expect(client.requestMethod("status.get", { kind: "delay", delay_ms: 1_000 }))
+  it("closing cancels an Episode request without a client timer", async () => {
+    client = makeClient();
+    await client.connect();
+    const pending = client.requestMethod("memory.episode.record", { kind: "delay", delay_ms: 5_000 });
+    const rejected = expect(pending).rejects.toBeInstanceOf(BridgeClientError);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await client.close();
+    await rejected;
+  });
+
+  it("terminates a bridge that never answers the initial handshake", async () => {
+    client = new BridgeClient({
+      executable: wrapper,
+      cwd: repoRoot,
+      env: { PATH: process.env.PATH ?? "", LIBRA_SKIP_WEB_BUILD: "initialize-stall" },
+      requestTimeoutMs: 250,
+    });
+    await expect(client.connect())
       .rejects.toMatchObject({ code: "request_timeout" });
     await expect(client.requestMethod("status.get"))
       .rejects.toMatchObject({ code: "not_connected" });

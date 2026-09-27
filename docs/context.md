@@ -1,21 +1,7 @@
-# Context injection
+# Context integration
 
-`@libra/dsh-context` queries Libra `context.get` through the tools facade and injects a bounded,
-redacted summary (≤ 4 KiB / 1,500 tokens per turn) with `anchor_id`, `schema_version`, and
-`source` metadata. The actual response buckets are `sessions` and `recent_checkpoints`; unknown
-or legacy buckets are treated as generic bounded data.
+## Current support
 
-Compaction/resume re-queries current context through the host adapter rather than copying a stale
-parent anchor. If the DSH injection capability is unavailable, the result contains a warning and
-does not claim successful host injection.
+The old `packages/context` adapter was not wired into the current bundle entry and has been removed in the Cordis-native refactor. Its former interfaces are not a supported runtime surface. Historical implementation reports remain dated; they are not current feature documentation.
 
-## Project Memory recall
-
-Memory recall is an additional module and does not change `context.get`. Before an
-accepted model turn, the bundle can call `memory.recall` with the DSH session id
-and accepted user query. Libra returns the already filtered and rendered prompt
-section together with receipt provenance; the plugin injects that section without
-rewriting it.
-
-The module refreshes its snapshot after DSH surface replacement so a compacted or
-retried request does not depend on a stale Memory selection.
+See the [plugin overview](../README.md) and [profile setup](profile.md) for currently connected capabilities. DSH retains ownership of its native agent, approval, workspace and UI behavior.

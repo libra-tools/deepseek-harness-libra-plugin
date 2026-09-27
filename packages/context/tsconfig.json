@@ -1,9 +1,0 @@
-{
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "lib"
-  },
-  "references": [{ "path": "../bridge-client" }, { "path": "../tools" }, { "path": "../session" }],
-  "include": ["src/**/*.ts"]
-}

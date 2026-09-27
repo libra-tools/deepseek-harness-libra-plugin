@@ -15,6 +15,7 @@ import {
   type StreamChunk,
 } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
+import type {} from "@libra-tools/dsh-bundle";
 import { afterEach, describe, expect, it } from "vitest";
 
 class CaptureAdapter extends LlmAdapter {
@@ -54,17 +55,6 @@ function messageText(message: Message): string {
   return message.content
     .map((block) => block.type === "text" ? block.text : "")
     .join("");
-}
-
-interface LibraMemorySource {
-  kind: "libra-memory";
-  receiptId: string;
-  viewHash: string;
-  bundleHash: string;
-  selectedCount: number;
-  tokenBudget: number;
-  form: "snapshot";
-  sections: Array<{ name: "libra-memory"; text: string }>;
 }
 
 describe("DSH alpha.1 runtime gate", () => {
@@ -116,7 +106,7 @@ describe("DSH alpha.1 runtime gate", () => {
 
     const loggedMessages = agent.session.events
       .filter((event) => event.type === "user/message")
-      .map((event) => event.data as Message);
+      .map((event) => event.data);
     const sessionMemory = memoryMessage(loggedMessages);
     expect(sessionMemory).toBeDefined();
 
@@ -124,7 +114,8 @@ describe("DSH alpha.1 runtime gate", () => {
     expect(requestText).toContain(expectedSubstring);
     expect(sessionMemory!.content).toEqual(requestMemory!.content);
     expect(sessionMemory).toEqual(requestMemory);
-    const source = requestMemory!.source as unknown as LibraMemorySource;
+    const source = requestMemory!.source;
+    if (source.kind !== "libra-memory") throw new Error("expected the plugin's typed Memory source");
     expect(requestMemory!.source).toMatchObject({
       kind: "libra-memory",
       selectedCount: 1,
