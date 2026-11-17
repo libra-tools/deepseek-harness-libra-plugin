@@ -18,13 +18,14 @@ interface AppendResult {
 }
 
 export class SessionProjectionService {
-  private readonly outbox: OutboxStore;
+  private outbox: OutboxStore;
   private readonly bridge: BridgeClient;
   private readonly maxConcurrentSessions: number;
   private readonly maxFlushRetries: number;
   private readonly pausedSessions = new Set<string>();
   private readonly activeSessions = new Set<string>();
   private readonly openedSessions = new Set<string>();
+  private readonly openingSessions = new Map<string, Promise<void>>();
   private readonly warnings: string[] = [];
 
   constructor(
@@ -59,32 +60,44 @@ export class SessionProjectionService {
     return this.metrics(event.session_id);
   }
 
-  async open(sessionId: string, parentSessionId?: string): Promise<void> {
-    if (this.openedSessions.has(sessionId)) {
+  async open(session: { id: unknown; header?: { parentSession?: unknown } }): Promise<void> {
+    const sessionId = String(session.id);
+    const parent = session.header?.parentSession;
+    const parentSessionId = parent === undefined ? undefined : String(parent);
+    const storageKey = sessionId;
+    if (this.openedSessions.has(storageKey)) {
       return;
     }
-    const opened = await this.bridge.requestMethod("session.open", {
-      session_id: sessionId,
-      ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
-    });
-    if (opened.state !== "success") {
-      throw new Error(opened.error?.message ?? "session.open failed");
+    const existing = this.openingSessions.get(storageKey);
+    if (existing !== undefined) return existing;
+    const opening = (async () => {
+      const opened = await this.bridge.requestMethod("session.open", {
+        session_id: sessionId,
+        ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
+      });
+      if (opened.state !== "success") throw new Error(opened.error?.message ?? "session.open failed");
+      this.openedSessions.add(storageKey);
+      this.activeSessions.add(sessionId);
+    })();
+    this.openingSessions.set(storageKey, opening);
+    try {
+      await opening;
+    } finally {
+      this.openingSessions.delete(storageKey);
     }
-    this.openedSessions.add(sessionId);
-    this.activeSessions.add(sessionId);
   }
 
-  async flush(sessionId: string): Promise<number> {
+  async flush(session: { id: unknown; header?: { parentSession?: unknown } }): Promise<number> {
+    const sessionId = String(session.id);
     const contract = this.bridge.contract;
     let acked = 0;
     let retries = 0;
     for (;;) {
-      const batch = this.outbox.pendingBatch(sessionId, contract);
+      const batch = this.outbox.pendingBatch(String(session.id), contract);
       if (batch.length === 0) {
         break;
       }
-      const parentSessionId = this.outbox.parentSessionId(sessionId);
-      await this.open(sessionId, parentSessionId);
+      await this.open(session);
       let append;
       try {
         append = await this.bridge.requestMethod("event.append", {
@@ -131,7 +144,9 @@ export class SessionProjectionService {
     return acked;
   }
 
-  async dispose(sessionId: string, timeoutMs = 5_000): Promise<DisposeResult> {
+  async dispose(session: { id: unknown; header?: { parentSession?: unknown } }, timeoutMs = 5_000): Promise<DisposeResult> {
+    const sessionId = String(session.id);
+    if (this.outbox.pendingBatch(sessionId, this.bridge.contract).length === 0 && !this.openingSessions.has(sessionId) && !this.activeSessions.has(sessionId)) return { drained: true, warnings: [] };
     const warnings: string[] = [];
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -140,7 +155,7 @@ export class SessionProjectionService {
         break;
       }
       try {
-        await this.flush(sessionId);
+        await this.flush(session);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         warnings.push(`flush failed during dispose for ${sessionId}: ${message}`);
@@ -155,10 +170,12 @@ export class SessionProjectionService {
         `session/disposed drain incomplete for ${sessionId}: ${remaining.length} events remain after ${timeoutMs}ms`,
       );
       this.warnings.push(...warnings);
+      return { drained, warnings };
     }
-    await this.bridge.requestMethod("session.close", { session_id: sessionId });
+    const closed = await this.bridge.requestMethod("session.close", { session_id: sessionId });
+    if (closed.state !== "success") throw new Error(closed.error?.message ?? "session.close failed");
     this.activeSessions.delete(sessionId);
-    this.openedSessions.delete(sessionId);
+    this.openedSessions.clear();
     this.pausedSessions.delete(sessionId);
     return { drained, warnings };
   }

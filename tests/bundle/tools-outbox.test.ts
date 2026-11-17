@@ -1,11 +1,14 @@
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, realpathSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolDefinition as DshToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { BridgeClient } from "@libra/dsh-bridge-client";
+import { SessionProjectionService } from "@libra/dsh-session";
 
 import { apply } from "@libra/dsh-bundle";
 
@@ -27,6 +30,7 @@ interface TestSession {
   surface: { replaceGeneration: number; nodes: number[] };
   appended: TestMessage[];
   eventAt(sequence: number): { seq: number; type: string; data: TestMessage } | undefined;
+  ownEvents(): readonly { seq: number; type: string; data: TestMessage }[];
   append: (
     type: string,
     message: TestMessage,
@@ -45,6 +49,7 @@ function makeSession(id: string, parentSession?: string): TestSession {
     surface: { replaceGeneration: 0, nodes: [] },
     appended: [],
     eventAt: (sequence) => session.events[sequence],
+    ownEvents: () => session.events.slice(),
     append: (type, message, options) => {
       const sequence = session.events.length;
       session.events.push({ seq: sequence, type, data: message });
@@ -259,37 +264,248 @@ describe("libra outbox projection", () => {
     dispose = undefined;
     if (outboxRoot) rmSync(outboxRoot, { recursive: true, force: true });
     outboxRoot = undefined;
+    vi.restoreAllMocks();
+  });
+
+  it("waits for capture, drains the outbox, then closes the disposed session once", async () => {
+    let exactSession = false;
+    outboxRoot = mkdtempSync(join(tmpdir(), "libra-outbox-order-"));
+    const session = makeSession("ordered-session");
+    const other = makeSession("other-session");
+    const harness = makeContext([session, other]);
+    const original = BridgeClient.prototype.requestMethod;
+    const originalFlush = SessionProjectionService.prototype.flush;
+    let flushes = 0;
+    const projectionFlush = vi.spyOn(SessionProjectionService.prototype, "flush").mockImplementation(async function (id) {
+      if (exactSession && flushes++ === 0) throw new Error("flush is still waiting for capture");
+      return originalFlush.call(this, id);
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const calls: Array<{ method: string; sessionId: unknown; phase: "start" | "end" }> = [];
+    vi.spyOn(BridgeClient.prototype, "requestMethod").mockImplementation(async function (method, params) {
+      const sessionId = (params as { session_id?: string } | undefined)?.session_id;
+      calls.push({ method, sessionId, phase: "start" });
+      if (method === "memory.episode.record") await gate;
+      const result = await original.call(this, method, params);
+      calls.push({ method, sessionId, phase: "end" });
+      return result;
+    });
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper, repositoryRoot: repoRoot, outboxRoot, captureMemoryEpisodes: true });
+    const preStep = harness.listenersOf("agent/pre-step")[0] as unknown as (
+      payload: unknown, next: () => Promise<unknown>,
+    ) => Promise<unknown>;
+    try {
+      await preStep({ agent: { session }, turn: 1, step: 1, signal: new AbortController().signal },
+        async () => ({ kind: "enter", messages: [{ id: "q", role: "user", content: [{ type: "text", text: "goal" }], source: { kind: "user" } }] }));
+      session.events.push({ seq: 0, type: "assistant/message", data: { turn: 1, message: { content: [{ type: "text", text: "answer" }] } } as unknown as TestMessage });
+      await harness.emit("session/event", session, { seq: 0, type: "assistant/message", data: session.events[0]!.data });
+      await harness.emit("session/event", session, { seq: 1, type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } });
+      await vi.waitFor(() => expect(calls.some((call) => call.method === "memory.episode.record")).toBe(true));
+      // DSH dispatches session/flush listeners in parallel, not in registration order.
+      const flush = Promise.all(harness.listenersOf("session/flush").map((listener) =>
+        (listener as unknown as (session: TestSession) => unknown)(session)));
+      await harness.emit("session/disposed", session);
+      exactSession = true;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(projectionFlush).not.toHaveBeenCalled();
+      expect(calls.some((call) => call.method === "event.append")).toBe(false);
+      expect(calls.some((call) => call.method === "session.close")).toBe(false);
+      release();
+      await flush;
+      expect(projectionFlush).toHaveBeenCalledWith({ id: session.id, header: session.header });
+      await vi.waitFor(() => expect(calls.filter((call) => call.method === "session.close" && call.phase === "end")).toHaveLength(1));
+      const methods = calls.filter((call) => call.sessionId === session.id).map((call) => `${call.method}:${call.phase}`);
+      expect(methods.filter((method) => method === "session.open:start")).toHaveLength(1);
+      expect(methods.indexOf("memory.episode.record:end")).toBeLessThan(methods.indexOf("event.append:start"));
+      expect(methods.indexOf("session.flush:end")).toBeLessThan(methods.indexOf("session.close:start"));
+      expect(calls.some((call) => call.method === "session.close" && call.sessionId === other.id)).toBe(false);
+    } finally {
+      release();
+    }
+  });
+
+  it("waits for an in-flight recall and flushes the live tail on unload", async () => {
+    outboxRoot = mkdtempSync(join(tmpdir(), "libra-outbox-unload-"));
+    const session = makeSession("unload-tail");
+    const harness = makeContext([session]);
+    const original = BridgeClient.prototype.requestMethod;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const calls: string[] = [];
+    vi.spyOn(BridgeClient.prototype, "requestMethod").mockImplementation(async function (method, params) {
+      calls.push(`${method}:start`);
+      if (method === "memory.recall") await gate;
+      const result = await original.call(this, method, params);
+      calls.push(`${method}:end`);
+      return result;
+    });
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper, repositoryRoot: repoRoot, outboxRoot });
+    const preStep = harness.listenersOf("agent/pre-step")[0] as unknown as (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>;
+    try {
+      const step = preStep({ agent: { session }, turn: 1, step: 1, signal: new AbortController().signal },
+        async () => ({ kind: "enter", messages: [{ id: "q", role: "user", content: [{ type: "text", text: "goal" }], source: { kind: "user" } }] }));
+      await vi.waitFor(() => expect(calls).toContain("memory.recall:start"));
+      await harness.emit("session/event", session, { seq: 0, type: "turn/start", data: { turn: 1 } });
+      let unloaded = false;
+      const unloading = dispose().then(() => { unloaded = true; });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unloaded).toBe(false);
+      release();
+      await step;
+      await unloading;
+      dispose = undefined;
+      expect(calls).toContain("session.flush:end");
+      expect(calls).not.toContain("session.close:start");
+      expect(snapshot(session.id).entries).toHaveLength(0);
+    } finally {
+      release();
+    }
+  });
+
+  it("persists a resumed session event while the previous generation is retiring", async () => {
+    outboxRoot = mkdtempSync(join(tmpdir(), "libra-outbox-generation-"));
+    const oldSession = makeSession("reused-generation");
+    const nextSession = makeSession("reused-generation");
+    const harness = makeContext([oldSession]);
+    const original = BridgeClient.prototype.requestMethod;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const batches: string[] = [];
+    vi.spyOn(BridgeClient.prototype, "requestMethod").mockImplementation(async function (method, params) {
+      if (method === "event.append") {
+        batches.push(JSON.stringify(params));
+        if (batches.length === 1) await gate;
+      }
+      return original.call(this, method, params);
+    });
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper, repositoryRoot: repoRoot, outboxRoot });
+    try {
+      await harness.emit("session/event", oldSession, { seq: 0, type: "turn/start", data: { generation: "old" } });
+      await harness.emit("session/disposed", oldSession);
+      await vi.waitFor(() => expect(batches).toHaveLength(1));
+      await harness.emit("session/created", nextSession);
+      await harness.emit("session/event", nextSession, { seq: 1, type: "turn/start", data: { generation: "new" } });
+      const namespace = createHash("sha256").update(realpathSync(repoRoot)).digest("hex");
+      const snapshots = readdirSync(join(outboxRoot, namespace), { recursive: true }).filter((name) => name.endsWith(".outbox.json"))
+        .map((name) => readFileSync(join(outboxRoot!, namespace, name), "utf8"));
+      expect(snapshots.some((content) => content.includes('\\"generation\\":\\"new\\"'))).toBe(true);
+      expect(batches).toHaveLength(1);
+      release();
+      await harness.emit("session/flush", oldSession);
+    } finally {
+      release();
+    }
+  });
+
+  it("warns about unscoped legacy outboxes without modifying them", async () => {
+    outboxRoot = mkdtempSync(join(tmpdir(), "libra-outbox-legacy-"));
+    const legacyPath = join(outboxRoot, "legacy.outbox.json");
+    const legacy = '{"session_id":"legacy","entries":[{"payload":"unowned"}]}';
+    writeFileSync(legacyPath, legacy);
+    const harness = makeContext();
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper, repositoryRoot: repoRoot, outboxRoot });
+    await harness.emit("session/event", makeSession("fresh"), { seq: 1, type: "turn/start", data: { turn: 1 } });
+    expect(readFileSync(legacyPath, "utf8")).toBe(legacy);
+    expect(harness.warnings.some((warning) => /legacy/i.test(warning) && warning.includes(legacyPath))).toBe(true);
+  });
+
+  it("isolates outboxes for different repositories sharing a session id", async () => {
+    outboxRoot = mkdtempSync(join(tmpdir(), "libra-outbox-repos-"));
+    const session = makeSession("same-repo-id");
+    const first = makeContext([session]);
+    // Simulate an interrupted flush, leaving the first repository's durable tail.
+    const original = BridgeClient.prototype.requestMethod;
+    vi.spyOn(BridgeClient.prototype, "requestMethod").mockImplementation(async function (method, params) {
+      if (method === "event.append") throw new Error("offline");
+      return original.call(this, method, params);
+    });
+    dispose = await apply(first.ctx, { libraExecutable: wrapper, repositoryRoot: repoRoot, outboxRoot });
+    await first.emit("session/event", session, { seq: 0, type: "turn/start", data: { repository: "one" } });
+    await dispose();
+    dispose = undefined;
+    vi.restoreAllMocks();
+    const second = makeContext([session]);
+    dispose = await apply(second.ctx, { libraExecutable: wrapper, repositoryRoot: tmpdir(), outboxRoot });
+    await second.emit("session/event", session, { seq: 0, type: "turn/start", data: { repository: "two" } });
+    const firstHash = createHash("sha256").update(realpathSync(repoRoot)).digest("hex");
+    const secondHash = createHash("sha256").update(realpathSync(tmpdir())).digest("hex");
+    const readEntries = (hash: string) => {
+      const directory = readdirSync(join(outboxRoot!, hash), { withFileTypes: true }).find((entry) => entry.isDirectory() && entry.name !== ".session-locks")?.name;
+      if (!directory) throw new Error("outbox generation is missing");
+      return JSON.parse(readFileSync(join(outboxRoot!, hash, directory, `${session.id}.outbox.json`), "utf8")).entries;
+    };
+    expect(readEntries(firstHash)[0]).toMatchObject({ state: "pending", payload: expect.stringContaining("one") });
+    expect(readEntries(secondHash)[0]).toMatchObject({ state: "pending", payload: expect.stringContaining("two") });
+  });
+
+  it("preserves live sessions when the plugin is unloaded", async () => {
+    outboxRoot = mkdtempSync(join(tmpdir(), "libra-outbox-hmr-"));
+    const session = makeSession("live-hmr");
+    const harness = makeContext([session]);
+    const request = vi.spyOn(BridgeClient.prototype, "requestMethod");
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper, repositoryRoot: repoRoot, outboxRoot });
+    const preStep = harness.listenersOf("agent/pre-step")[0] as unknown as (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>;
+    await preStep({ agent: { session }, turn: 1, step: 1, signal: new AbortController().signal },
+      async () => ({ kind: "enter", messages: [{ id: "q", role: "user", content: [{ type: "text", text: "goal" }], source: { kind: "user" } }] }));
+    await dispose();
+    dispose = undefined;
+    expect(request.mock.calls.some(([method]) => method === "session.close")).toBe(false);
+  });
+
+  it("keeps undelivered events and does not close on a failed flush", async () => {
+    outboxRoot = mkdtempSync(join(tmpdir(), "libra-outbox-failure-"));
+    const session = makeSession("failed-flush");
+    const harness = makeContext([session]);
+    const original = BridgeClient.prototype.requestMethod;
+    const calls: string[] = [];
+    vi.spyOn(BridgeClient.prototype, "requestMethod").mockImplementation(async function (method, params) {
+      calls.push(method);
+      if (method === "event.append") throw new Error("offline");
+      return original.call(this, method, params);
+    });
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper, repositoryRoot: repoRoot, outboxRoot });
+    await harness.emit("session/event", session, { seq: 0, type: "turn/start", data: { turn: 1 } });
+    await harness.emit("session/disposed", session);
+    await vi.waitFor(() => expect(harness.warnings.some((warning) => warning.includes("flush failed"))).toBe(true));
+    expect(calls.filter((method) => method === "session.close")).toHaveLength(0);
+    expect(snapshot(session.id).entries).toHaveLength(1);
   });
 
   function snapshot(sessionId: string): {
     last_acked_seq: number;
     entries: unknown[];
   } {
-    return JSON.parse(readFileSync(join(outboxRoot!, `${sessionId}.outbox.json`), "utf8"));
+    const namespace = createHash("sha256").update(realpathSync(repoRoot)).digest("hex");
+    const files = readdirSync(join(outboxRoot!, namespace), { recursive: true }).filter((file) => file.endsWith(".outbox.json"));
+    const path = files.find((file) => file.endsWith(`/${sessionId}.outbox.json`));
+    if (!path) throw new Error(`outbox not captured for ${sessionId}`);
+    return JSON.parse(readFileSync(join(outboxRoot!, namespace, path), "utf8"));
   }
 
   it("captures session events and drains them on flush", async () => {
     outboxRoot = mkdtempSync(join(tmpdir(), "libra-outbox-"));
-    const harness = makeContext([makeSession("s-10", "parent-9")]);
+    const session = makeSession("s-10", "parent-9");
+    const harness = makeContext([session]);
     dispose = await apply(harness.ctx, {
       libraExecutable: wrapper,
       repositoryRoot: repoRoot,
       outboxRoot,
     });
-    await harness.emit("session/event", makeSession("s-10", "parent-9"), {
+    await harness.emit("session/event", session, {
       seq: 0,
       type: "user/message",
       data: { role: "user", content: [{ type: "text", text: "hello" }], source: { kind: "user" } },
     });
-    await harness.emit("session/event", makeSession("s-10", "parent-9"), {
+    await harness.emit("session/event", session, {
       seq: 1,
       type: "user/message",
       data: { role: "user", content: [{ type: "text", text: "again" }], source: { kind: "user" } },
     });
-    expect(readdirSync(outboxRoot)).toContain("s-10.outbox.json");
+    expect(readdirSync(join(outboxRoot, createHash("sha256").update(realpathSync(repoRoot)).digest("hex")), { recursive: true }).some((entry) => entry.endsWith("/s-10.outbox.json"))).toBe(true);
     expect(snapshot("s-10").entries).toHaveLength(2);
 
-    await harness.emit("session/flush", makeSession("s-10", "parent-9"));
+    await harness.emit("session/flush", session);
 
     const drained = snapshot("s-10");
     expect(drained.last_acked_seq).toBe(1);
@@ -299,7 +515,8 @@ describe("libra outbox projection", () => {
 
   it("contains flush failures instead of rejecting the session pipeline", async () => {
     outboxRoot = mkdtempSync(join(tmpdir(), "libra-outbox-"));
-    const harness = makeContext([makeSession("s-11")]);
+    const session = makeSession("s-11");
+    const harness = makeContext([session]);
     dispose = await apply(harness.ctx, {
       libraExecutable: wrapper,
       repositoryRoot: repoRoot,
@@ -307,12 +524,12 @@ describe("libra outbox projection", () => {
     });
     // Events from a session whose outbox never opens: capture succeeds, flush
     // runs against the bridge (fake bridge acks), so no warning is expected.
-    await harness.emit("session/event", makeSession("s-11"), {
+    await harness.emit("session/event", session, {
       seq: 0,
       type: "user/message",
       data: { role: "user", content: [{ type: "text", text: "x" }], source: { kind: "user" } },
     });
-    await harness.emit("session/flush", makeSession("s-11"));
+    await harness.emit("session/flush", session);
     expect(snapshot("s-11").last_acked_seq).toBe(0);
     // Any handler failure must be logged, never thrown out of emit.
     expect(harness.warnings.every((entry) => entry.startsWith("libra-outbox:"))).toBe(true);

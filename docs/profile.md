@@ -20,10 +20,17 @@ pnpm pack:bundle
 dsh plugin --profile headless add /absolute/path/to/libra-tools-dsh-bundle-0.2.0.tgz
 ```
 
-Configure `libraExecutable` with an absolute path, a relative path, or a `PATH` name for a Libra binary that advertises
-Agent Bridge protocol `1.1`, and set `repositoryRoot` to an initialized Libra
-repository. The plugin can also read these values from `LIBRA_BINARY` and
-`LIBRA_REPO`. Optional knobs: `outboxRoot`, `injectContext` (default `true`),
-`workspaceLeaseTtlMs`, and `memoryTokenBudget` (see the README configuration
-table). Optional Episode capture stays off unless `captureMemoryEpisodes` is
-true; `memoryModel` defaults to `deepseek-chat`.
+Configure `libraExecutable` with an absolute path, a relative path, or a `PATH`
+name, and set `repositoryRoot` to an initialized Libra repository. The plugin
+can also read `LIBRA_BINARY` and `LIBRA_REPO`. Without an explicit repository,
+it uses the host process's current directory, which can differ from a DSH
+session's workspace. Reload the plugin after changing the executable or
+repository.
+
+Optional settings include `outboxRoot`, `injectContext`,
+`workspaceLeaseTtlMs`, and `memoryTokenBudget`. For the new local conversation
+Memory, use a bridge advertising the Memory methods and explicitly set the
+repository-local `bridge.conversationMemory` configuration to `true`. Capture
+also requires `captureMemoryEpisodes: true` in the plugin. Both settings are
+off by default. `memoryModel` applies only to older compiler-backed bridges;
+the new local implementation does not invoke a provider.

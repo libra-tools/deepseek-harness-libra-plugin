@@ -1,3 +1,11 @@
-# Libra ignore file
-# Uses gitignore-compatible patterns.
-# Add generated files and local-only paths below.
+node_modules/
+.libra/
+*.tsbuildinfo
+packages/*/lib/
+packages/*/dist/
+.profile-bundle-staging/
+packages/bundle/package.publish.json
+*.tgz
+.dsh-dev
+.dsh-types.json
+.release-artifacts/

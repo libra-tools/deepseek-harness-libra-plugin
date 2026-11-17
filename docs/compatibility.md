@@ -1,19 +1,19 @@
 # Compatibility
 
-The bundle is validated as one unit against the current Harness revision. There
-is no separate "Memory module era" anymore — Memory recall, tools + approval,
-workspace leases, context grounding, and the session-event outbox are composed
-together and verified together.
+The bundle composes Memory recall, tools and approval, workspace leases,
+context grounding and the session-event outbox. Memory support depends on the
+methods advertised by the actual Libra binary and must be verified separately
+from the DSH compatibility gate.
 
 | Surface | Current value | Evidence/state |
 | --- | --- | --- |
 | Libra Agent Bridge | protocol `1.2`, Libra `0.21.25` authority `a92b29e8fc9ad514ebe2e6c53216845aa059d94f` | `protocol/agent-bridge.v1.receipt.json` |
-| Protocol source | `protocol.rs` SHA256 `60ed0117473332e701f57019501855a3a47126cb11a3ecf69541c8c2ace8ecab` | receipt; refresh before any authority change |
+| Protocol source | `protocol.rs` SHA256 `5a47f2dfdcf0d7ec6a0c1d97f9955cfff321a45323546f2f7a230d007bbf46dc` | historical receipt; not a receipt for the new local implementation |
 | Initialize golden frame | fixture SHA256 `b34ac2e5d9b17af4450508360c671845156a6808ebe491ec9a7036633065f753` | receipt |
-| DeepSeek Harness | `0.2.2-rc.3` (`dsh-v0.2.2-rc.3`) | `engines.dsh: ^0.2.2-rc.3`; external CLI/runtime receipt `remote-pending` |
-| Bundle | `@libra-tools/dsh-bundle@0.2.0` | local build; `pnpm typecheck && pnpm lint && pnpm test && pnpm build`. Real Libra/DSH gates remain `remote-pending`. |
+| DeepSeek Harness | `0.2.2-rc.3` (`dsh-v0.2.2-rc.3`) | `engines.dsh: ^0.2.2-rc.3`; isolated installed-runtime offline Memory test passed |
+| Bundle | `@libra-tools/dsh-bundle@0.2.0` | local build; 120 tests passed, 5 skipped; typecheck, lint and build passed |
 
-Only bundle, bridge-client and protocol remain in the workspace. The current entry provides Memory recall and optional Episode capture. Earlier rc.7, tools, workspace, UI and outbox reports describe historical work; they are not supported-feature claims for this revision.
+The workspace also contains context, session, tools, UI and workspace packages. The new local Memory implementation is a separate development change and has not yet received a signed compatibility receipt. A negotiated Memory capability does not establish that Episode capture is enabled.
 
 ## Wiring against DSH `0.2.2-rc.3`
 
@@ -30,11 +30,13 @@ Only bundle, bridge-client and protocol remain in the workspace. The current ent
 
 - `pnpm typecheck` — all 9 packages against the pinned DSH `0.2.2-rc.3` type surface.
 - `pnpm lint` — eslint clean.
-- `pnpm test` — 79+ tests across protocol, bridge-client, session, tools,
-  workspace, context, ui, and bundle (memory / tools+approval / outbox /
-  workspace lease / context grounding / projection fold / degraded activation).
+- `pnpm test` — protocol, bridge-client, session, tools, workspace, context,
+  UI, and bundle tests, including Memory, outbox generation recovery and
+  shutdown containment. Consult the current test output for the exact count.
 - `pnpm build` — `tsc -b` + esbuild `dist/` bundle + protocol fixture copy.
 
-Real Libra/DSH integration gates remain `remote-pending` until `LIBRA_BINARY`,
-`LIBRA_REPO`, and a pinned `DSH_CLI` are provided; the fake bridge does not
-substitute for them.
+Real integration uses an explicitly supplied `LIBRA_BINARY` and isolated
+repositories. `tests/dsh-alpha1/installed-memory-offline.mjs` loads the installed
+DSH `0.2.2-rc.3` runtime with an offline adapter; it is not a claim that the
+historical alpha lifecycle suite supports this revision. The fake bridge does
+not substitute for the real-binary gates.

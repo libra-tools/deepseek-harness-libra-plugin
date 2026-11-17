@@ -1,9 +1,11 @@
 import { chmodSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 import type { Context } from "@deepseek-ai/cordis";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { BridgeClient } from "@libra/dsh-bridge-client";
 
 import { apply, inject, name } from "@libra/dsh-bundle";
 
@@ -24,6 +26,7 @@ interface TestSession {
   surface: { replaceGeneration: number; nodes: number[] };
   appended: TestMessage[];
   eventAt(sequence: number): { seq: number; type: string; data: TestMessage } | undefined;
+  ownEvents(): readonly { seq: number; type: string; data: TestMessage }[];
   append: (
     type: string,
     message: TestMessage,
@@ -36,7 +39,7 @@ interface TestSession {
 
 type TestDecision =
   | { kind: "reject" }
-  | { kind: "enter"; messages: TestMessage[] };
+  | { kind: "enter"; messages: TestMessage[]; startsRequestSeries?: true };
 
 type PreStepListener = (
   payload: {
@@ -65,6 +68,7 @@ interface TestHarness {
   listener(name: "agent/pre-step"): PreStepListener;
   listener(name: "agent/request-error"): RequestErrorListener;
   emit(name: "session/created" | "session/disposed", session: TestSession): void;
+  emitMemoryEvent(session: TestSession, event: { type: string; data: unknown }): void;
 }
 
 function makeSession(id: string): TestSession {
@@ -74,6 +78,7 @@ function makeSession(id: string): TestSession {
     surface: { replaceGeneration: 0, nodes: [] },
     appended: [],
     eventAt: (sequence) => session.events[sequence],
+    ownEvents: () => session.events.slice(),
     append: (type, message, options) => {
       const sequence = session.events.length;
       session.events.push({ seq: sequence, type, data: message });
@@ -133,6 +138,11 @@ function makeContext(seed: TestSession[] = []): TestHarness {
   return {
     ctx: ctx as unknown as Context,
     listener,
+    emitMemoryEvent: (session, event) => {
+      const entry = listeners.get("session/event")?.[1];
+      if (!entry) throw new Error("missing session/event listener");
+      (entry as unknown as (session: TestSession, event: { type: string; data: unknown }) => void)(session, event);
+    },
     emit: (event, session) => {
       for (const entry of listeners.get(event) ?? []) {
         (entry as unknown as (value: TestSession) => unknown)(session);
@@ -163,6 +173,127 @@ describe("Cordis memory adapter", () => {
   afterEach(async () => {
     await dispose?.();
     dispose = undefined;
+    vi.restoreAllMocks();
+  });
+
+  it("captures the final own response and waits for capture before the next recall", async () => {
+    const backing = makeSession("episode-s1");
+    const session = new Proxy(backing, { get: (target, key, receiver) => key === "events" ? undefined : Reflect.get(target, key, receiver) });
+    const harness = makeContext([session]);
+    const original = BridgeClient.prototype.requestMethod;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const calls: Array<{ method: string; params: unknown }> = [];
+    vi.spyOn(BridgeClient.prototype, "requestMethod").mockImplementation(async function (method, params) {
+      calls.push({ method, params });
+      if (method === "memory.episode.record") await gate;
+      return original.call(this, method, params);
+    });
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper, repositoryRoot: repoRoot, captureMemoryEpisodes: true });
+    const preStep = harness.listener("agent/pre-step");
+    const step = (turn: number, text: string) => preStep(
+      { agent: { session }, step: 1, turn, signal: new AbortController().signal },
+      async () => ({ kind: "enter", messages: [user(text)] }),
+    );
+    try {
+      await step(1, "first goal");
+      const addResponse = (turn: number, text: string) => backing.events.push({
+        seq: backing.events.length, type: "assistant/message",
+        data: { turn, message: { content: [{ type: "text", text }] } } as unknown as TestMessage,
+      });
+      addResponse(1, "intermediate");
+      addResponse(1, "final response");
+      harness.emitMemoryEvent(session, { type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } });
+      await vi.waitFor(() => expect(calls.some((call) => call.method === "memory.episode.record")).toBe(true));
+      expect(calls.find((call) => call.method === "memory.episode.record")?.params).toMatchObject({
+        session_id: "episode-s1", turn: 1, goal: "first goal", response_text: "final response",
+      });
+      let nextFinished = false;
+      const next = step(2, "second goal").then(() => { nextFinished = true; });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(nextFinished).toBe(false);
+      expect(calls.filter((call) => call.method === "memory.recall")).toHaveLength(1);
+      release();
+      await next;
+      expect(calls.filter((call) => call.method === "memory.recall")).toHaveLength(2);
+    } finally {
+      release();
+    }
+  });
+
+  it("does not capture aborted, incomplete, interrupted, or empty turns", async () => {
+    const backing = makeSession("episode-invalid");
+    const session = new Proxy(backing, { get: (target, key, receiver) => key === "events" ? undefined : Reflect.get(target, key, receiver) });
+    const harness = makeContext([session]);
+    const request = vi.spyOn(BridgeClient.prototype, "requestMethod");
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper, repositoryRoot: repoRoot, captureMemoryEpisodes: true });
+    const preStep = harness.listener("agent/pre-step");
+    for (const [turn, reason, response] of [
+      [1, "aborted", { message: { content: [{ type: "text", text: "aborted" }] } }],
+      [2, "completed", undefined],
+      [3, "completed", { interrupted: true, message: { content: [{ type: "text", text: "partial" }] } }],
+      [4, "completed", { message: { content: [{ type: "text", text: "   " }] } }],
+    ] as const) {
+      await preStep({ agent: { session }, step: 1, turn, signal: new AbortController().signal },
+        async () => ({ kind: "enter", messages: [user(`goal ${turn}`)] }));
+      if (response) backing.events.push({ seq: backing.events.length, type: "assistant/message", data: { turn, ...response } as unknown as TestMessage });
+      harness.emitMemoryEvent(session, { type: "turn/end", data: { turn, reason: { kind: reason } } });
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(request.mock.calls.some(([method]) => method === "memory.episode.record")).toBe(false);
+  });
+
+  it("waits for disposal to finish before reopening a session with the same id", async () => {
+    const first = makeSession("reused-id");
+    const harness = makeContext([first]);
+    const original = BridgeClient.prototype.requestMethod;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const calls: string[] = [];
+    vi.spyOn(BridgeClient.prototype, "requestMethod").mockImplementation(async function (method, params) {
+      calls.push(`${method}:start`);
+      if (method === "session.close") await gate;
+      const result = await original.call(this, method, params);
+      calls.push(`${method}:end`);
+      return result;
+    });
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper, repositoryRoot: repoRoot });
+    const preStep = harness.listener("agent/pre-step");
+    const step = (session: TestSession) => preStep(
+      { agent: { session }, step: 1, turn: 1, signal: new AbortController().signal },
+      async () => ({ kind: "enter", messages: [user("goal")] }),
+    );
+    try {
+      await step(first);
+      harness.emit("session/disposed", first);
+      await vi.waitFor(() => expect(calls).toContain("session.close:start"));
+      const reopened = step(makeSession("reused-id"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(calls.filter((entry) => entry === "session.open:start")).toHaveLength(1);
+      release();
+      await reopened;
+      expect(calls.indexOf("session.close:end")).toBeLessThan(calls.lastIndexOf("session.open:start"));
+      expect(calls.filter((entry) => entry === "session.open:start")).toHaveLength(2);
+    } finally {
+      release();
+    }
+  });
+
+  it("rejects a live repository switch instead of sending a session to another repository", async () => {
+    const session = makeSession("retarget-session");
+    const harness = makeContext([session]);
+    let root = repoRoot;
+    dispose = await apply(harness.ctx, {
+      libraExecutable: wrapper, repositoryRoot: { get: () => root },
+    });
+    const preStep = harness.listener("agent/pre-step");
+    const step = (turn: number) => preStep(
+      { agent: { session }, step: 1, turn, signal: new AbortController().signal },
+      async () => ({ kind: "enter", messages: [user(`turn ${turn}`)] }),
+    );
+    await step(1);
+    root = tmpdir();
+    await expect(step(2)).rejects.toThrow(/reload/i);
   });
 
   it("exports the narrow DSH plugin interface", () => {
@@ -190,10 +321,10 @@ describe("Cordis memory adapter", () => {
 
     const decision = await harness.listener("agent/pre-step")(
       { agent: { session }, step: 1, turn: 1, signal: new AbortController().signal },
-      async () => ({ kind: "enter", messages: original }),
+      async () => ({ kind: "enter", messages: original, startsRequestSeries: true }),
     );
 
-    expect(decision.kind).toBe("enter");
+    expect(decision).toMatchObject({ kind: "enter", startsRequestSeries: true });
     expect(entered(decision).messages.slice(0, 3)).toEqual(original);
     const memory = entered(decision).messages.at(-1);
     expect(memory.content).toEqual([{ type: "text", text: "Memory for first\nsecond" }]);

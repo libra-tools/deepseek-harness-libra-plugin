@@ -97,6 +97,25 @@ interface LiveSessionState {
   capture: Promise<void> | undefined;
 }
 
+const EPISODE_TRUNCATION_MARKER = "\n[TRUNCATED: original content omitted]";
+const utf8Encoder = new TextEncoder();
+
+function truncateUtf8(value: string, limit: number): { text: string; originalBytes: number } {
+  const originalBytes = utf8Encoder.encode(value).length;
+  if (originalBytes <= limit) return { text: value, originalBytes };
+  const markerBytes = utf8Encoder.encode(EPISODE_TRUNCATION_MARKER).length;
+  const budget = limit - markerBytes;
+  let end = 0;
+  let used = 0;
+  for (const character of value) {
+    const size = utf8Encoder.encode(character).length;
+    if (used + size > budget) break;
+    used += size;
+    end += character.length;
+  }
+  return { text: `${value.slice(0, end)}${EPISODE_TRUNCATION_MARKER}`, originalBytes };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -272,16 +291,19 @@ interface MemoryMountOptions {
   memoryTokenBudget?: () => number | undefined;
   /** When true, recall carries the turn and a completed turn records an Episode. */
   captureEpisodes?: () => boolean;
+  openSession: (session: Session) => Promise<void>;
+  waitSession: (session: Session) => Promise<void>;
 }
 
 async function mountMemory(
   ctx: Context,
   bridge: BridgeClient,
   options: MemoryMountOptions,
-): Promise<() => Promise<void>> {
+): Promise<{ dispose: () => Promise<void>; wait: (session: Session) => Promise<void>; retire: (session: Session) => Promise<void> }> {
   let stopping = false;
-  const sessions = new Map<string, LiveSessionState>();
+  const sessions = new Map<Session, LiveSessionState>();
   const retirements = new Set<Promise<void>>();
+  const recalls = new Set<Promise<MemoryDelivery | null>>();
   const listenerDisposers: Array<() => unknown> = [];
   const projections = ctx.get("sessionProjections") as SessionProjectionsLike | undefined;
   const projectedState = (session: Session): LibraMemoryProjectionState | undefined => {
@@ -292,8 +314,7 @@ async function mountMemory(
     return Array.isArray(seqs) ? { seqs: seqs as SessionSeq[] } : undefined;
   };
   const trackSession = (session: Session): LiveSessionState => {
-    const id = String(session.id);
-    const existing = sessions.get(id);
+    const existing = sessions.get(session);
     if (existing !== undefined) {
       existing.session = session;
       return existing;
@@ -308,7 +329,7 @@ async function mountMemory(
       retiring: undefined,
       capture: undefined,
     };
-    sessions.set(id, created);
+    sessions.set(session, created);
     return created;
   };
 
@@ -317,10 +338,8 @@ async function mountMemory(
     if (state.retiring !== undefined) throw new Error("DSH session is retiring");
     if (state.opened) return;
     if (state.opening !== undefined) return state.opening;
-    const id = String(state.session.id);
-    const opening = bridge.requestMethod("session.open", { session_id: id })
-      .then((request) => {
-        completedResult(request);
+    const opening = options.openSession(state.session)
+      .then(() => {
         state.opened = true;
       })
       .finally(() => {
@@ -330,16 +349,22 @@ async function mountMemory(
     return opening;
   };
 
-  const recall = async (state: LiveSessionState, queryText: string, turn: number): Promise<MemoryDelivery | null> => {
-    await openSession(state);
-    const budget = options.memoryTokenBudget?.();
-    const result = completedResult(await bridge.requestMethod("memory.recall", {
-      session_id: String(state.session.id),
-      query_text: queryText,
-      ...(typeof budget === "number" && budget > 0 ? { token_budget: budget } : {}),
-      ...(options.captureEpisodes?.() === true ? { turn } : {}),
-    }));
-    return parseDelivery(result);
+  const recall = (state: LiveSessionState, queryText: string, turn: number): Promise<MemoryDelivery | null> => {
+    const operation = (async () => {
+      await state.capture;
+      await openSession(state);
+      const budget = options.memoryTokenBudget?.();
+      const result = completedResult(await bridge.requestMethod("memory.recall", {
+        session_id: String(state.session.id),
+        query_text: queryText,
+        ...(typeof budget === "number" && budget > 0 ? { token_budget: budget } : {}),
+        ...(options.captureEpisodes?.() === true ? { turn } : {}),
+      }));
+      return parseDelivery(result);
+    })();
+    recalls.add(operation);
+    void operation.then(() => recalls.delete(operation), () => recalls.delete(operation));
+    return operation;
   };
 
   const markRefreshed = (state: LiveSessionState, turn: number, generation: number): void => {
@@ -350,19 +375,16 @@ async function mountMemory(
   const alreadyRefreshed = (state: LiveSessionState, turn: number, generation: number): boolean =>
     state.lastRefreshTurn === turn && state.lastRefreshGeneration === generation;
 
-  const retire = (session: Session): void => {
-    const state = sessions.get(String(session.id));
-    if (state === undefined || state.retiring !== undefined) return;
+  const retire = (session: Session): Promise<void> => {
+    const state = sessions.get(session);
+    if (state === undefined) return Promise.resolve();
+    if (state.retiring !== undefined) return state.retiring;
     const retirement = (async () => {
       try {
         await state.opening;
-        if (state.opened) {
-          completedResult(await bridge.requestMethod("session.close", {
-            session_id: String(session.id),
-          }));
-        }
+        await state.capture;
       } finally {
-        sessions.delete(String(session.id));
+        sessions.delete(session);
       }
     })();
     state.retiring = retirement;
@@ -374,6 +396,7 @@ async function mountMemory(
     void retirement.catch((error: unknown) => {
       ctx.logger.warn(`libra-memory: session retirement failed: ${String(error)}`);
     });
+    return retirement;
   };
 
   const captureEpisode = (session: Session, event: { type: string; data?: unknown }): void => {
@@ -382,26 +405,32 @@ async function mountMemory(
     if (!isRecord(reason) || reason.kind !== "completed") return;
     const turn = event.data.turn;
     if (typeof turn !== "number") return;
-    const state = sessions.get(String(session.id));
+    const state = sessions.get(session);
     if (state === undefined || state.retiring !== undefined || state.lastRefreshTurn !== turn || state.lastQuery === undefined) return;
-    const history = (session as unknown as { events?: Array<{ type: string; data?: unknown }> }).events ?? [];
-    const response = [...history].reverse().find((candidate) =>
+    const response = [...session.ownEvents()].reverse().find((candidate) =>
       candidate.type === "assistant/message" && isRecord(candidate.data) && candidate.data.turn === turn);
-    if (response === undefined || !isRecord(response.data) || response.data.interrupted === true) return;
+    if (response?.type !== "assistant/message" || response.data.interrupted === true) return;
     const message = response.data.message;
     const content = isRecord(message) && Array.isArray(message.content) ? message.content : [];
     const responseText = content.flatMap((block) =>
       isRecord(block) && block.type === "text" && typeof block.text === "string" ? [block.text] : []).join("\n");
     if (responseText.trim().length === 0) return;
     const previous = state.capture;
-    const goal = state.lastQuery;
+    const truncatedGoal = truncateUtf8(state.lastQuery, 4096);
+    const truncatedResponse = truncateUtf8(responseText, 16384);
+    for (const [field, truncated] of [["goal", truncatedGoal], ["response", truncatedResponse]] as const) {
+      if (truncated.originalBytes !== utf8Encoder.encode(truncated.text).length) {
+        ctx.logger.warn(`libra-memory: Episode truncated session=${String(session.id)} turn=${turn} field=${field} bytes=${truncated.originalBytes}`);
+      }
+    }
+    const goal = truncatedGoal.text;
     state.capture = (async () => {
       await previous;
       completedResult(await bridge.requestMethod("memory.episode.record", {
         session_id: String(session.id),
         turn,
         goal,
-        response_text: responseText,
+        response_text: truncatedResponse.text,
       }));
     })().catch((error: unknown) => {
       ctx.logger.warn(`libra-memory: Episode capture failed: ${String(error)}`);
@@ -422,14 +451,11 @@ async function mountMemory(
     listenerDisposers.push(ctx.on("session/created", (session) => {
       if (!stopping) trackSession(session);
     }));
-    listenerDisposers.push(ctx.on("session/disposed", (session) => {
-      if (!stopping) retire(session);
-    }));
     listenerDisposers.push(ctx.on("session/event", (session, event) => {
       if (!stopping) captureEpisode(session, event);
     }));
     listenerDisposers.push(ctx.on("session/flush", async (session) => {
-      await sessions.get(String(session.id))?.capture;
+      await sessions.get(session)?.capture;
     }));
     listenerDisposers.push(ctx.on("agent/pre-step", async (
       { agent, turn, step, signal },
@@ -438,6 +464,8 @@ async function mountMemory(
       const beforeGeneration = agent.session.surface.replaceGeneration;
       const decision = await next();
       if (decision.kind === "reject" || signal.aborted) return decision;
+      await options.waitSession(agent.session);
+      if (signal.aborted) return decision;
       const state = trackSession(agent.session);
       const generation = agent.session.surface.replaceGeneration;
       let queryText: string | undefined;
@@ -456,7 +484,7 @@ async function mountMemory(
       retireVisibleMemory(state.session, projectedState(state.session));
       markRefreshed(state, turn, state.session.surface.replaceGeneration);
       if (delivery === null || delivery.promptSection.length === 0) return decision;
-      return { kind: "enter", messages: [...decision.messages, memoryMessage(delivery)] };
+      return { ...decision, messages: [...decision.messages, memoryMessage(delivery)] };
     }, { prepend: true }));
     listenerDisposers.push(ctx.on("agent/request-error", async (
       { agent, turn, signal },
@@ -466,6 +494,8 @@ async function mountMemory(
       const action = await next();
       const generation = agent.session.surface.replaceGeneration;
       if (signal.aborted || action?.kind !== "retry" || generation <= beforeGeneration) return action;
+      await options.waitSession(agent.session);
+      if (signal.aborted) return action;
       const state = trackSession(agent.session);
       if (state.lastQuery === undefined || alreadyRefreshed(state, turn, generation)) return action;
       const delivery = await recall(state, state.lastQuery, turn);
@@ -484,11 +514,15 @@ async function mountMemory(
     throw error;
   }
 
-  return async (): Promise<void> => {
-    if (stopping) return;
-    stopping = true;
-    for (const dispose of listenerDisposers.reverse()) dispose();
-    await Promise.allSettled([...retirements]);
+  return {
+    wait: async (session) => { await sessions.get(session)?.capture; },
+    retire,
+    dispose: async () => {
+      if (stopping) return;
+      stopping = true;
+      for (const dispose of listenerDisposers.reverse()) dispose();
+      await Promise.allSettled([...retirements, ...recalls, ...[...sessions.values()].flatMap((state) => [state.capture, state.opening])]);
+    },
   };
 }
 
@@ -504,30 +538,23 @@ function bridgeEnv(deployment: ResolvedDeployment): Record<string, string> {
 }
 
 /**
- * Re-read volatile settings before each bridge call and retarget the child
- * when the binary or repository changes. One initialize is kept for a stable
- * target; a new target closes the child first.
+ * Re-read volatile settings before each bridge call. A changed target requires
+ * a reload so an existing session can never be sent to another repository.
  */
 function followDeployment(
   bridge: BridgeClient,
   current: () => Promise<ResolvedDeployment | undefined>,
+  initial: ResolvedDeployment,
 ): void {
   const original = bridge.requestMethod.bind(bridge);
-  let key = "";
+  const key = `${initial.libraExecutable}\0${initial.repositoryRoot}`;
   let gate: Promise<void> = Promise.resolve();
   bridge.requestMethod = (method, params) => {
     const run = gate.then(async () => {
       const deployment = await current();
       if (deployment === undefined) throw new Error("libra executable is not configured");
       const next = `${deployment.libraExecutable}\0${deployment.repositoryRoot}`;
-      if (next !== key) {
-        await bridge.retarget({
-          executable: deployment.libraExecutable,
-          cwd: deployment.repositoryRoot,
-          env: bridgeEnv(deployment),
-        });
-        key = next;
-      }
+      if (next !== key) throw new Error("Libra executable or repository changed; reload the plugin before continuing");
     }).then(() => original(method, params));
     gate = run.then(() => undefined, () => undefined);
     return run;
@@ -551,7 +578,6 @@ export async function apply(ctx: Context, config: Config): Promise<() => Promise
   const currentDeployment = async (): Promise<ResolvedDeployment | undefined> => {
     const resolved = await resolveDeployment(config);
     if (resolved.deployment !== undefined) {
-      live.root = resolved.deployment.repositoryRoot;
       live.ttl = resolved.deployment.workspaceLeaseTtlMs;
     }
     return resolved.deployment;
@@ -575,17 +601,45 @@ export async function apply(ctx: Context, config: Config): Promise<() => Promise
         cwd: deployment.repositoryRoot,
         env: bridgeEnv(deployment),
       });
-      followDeployment(bridge, currentDeployment);
+      followDeployment(bridge, currentDeployment, deployment);
       const disposers: Array<() => unknown> = [];
       let connected = false;
+      const shutdown = async (): Promise<void> => {
+        const drain = (async () => {
+          for (const dispose of disposers.reverse()) {
+            try {
+              await dispose();
+            } catch {
+              // contained: each layer is best-effort on shutdown
+            }
+          }
+        })();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timedOut = await Promise.race([
+          drain.then(() => false),
+          new Promise<true>((resolve) => { timer = setTimeout(() => resolve(true), 1_000); }),
+        ]);
+        clearTimeout(timer);
+        if (timedOut) ctx.logger.warn("libra: shutdown drain timed out; closing bridge with pending work");
+        if (connected) await bridge.close().catch(() => undefined);
+      };
       try {
         const negotiated = await bridge.connect();
         connected = true;
+        const outbox = mountLibraOutbox(ctx, bridge, {
+          repositoryRoot: deployment.repositoryRoot,
+          ...(deployment.outboxRoot !== undefined ? { outboxRoot: deployment.outboxRoot } : {}),
+        });
+        disposers.push(outbox.dispose);
         if (negotiated.methods.includes("memory.recall")) {
-          disposers.push(await mountMemory(ctx, bridge, {
+          const memory = await mountMemory(ctx, bridge, {
             memoryTokenBudget: () => readLive(config.memoryTokenBudget),
             captureEpisodes: () => deployment.captureMemoryEpisodes,
-          }));
+            openSession: outbox.open,
+            waitSession: outbox.wait,
+          });
+          outbox.setMemory(memory);
+          disposers.push(memory.dispose);
         } else {
           ctx.logger.warn("libra: bridge does not advertise memory.recall; Memory module not mounted");
         }
@@ -613,30 +667,9 @@ export async function apply(ctx: Context, config: Config): Promise<() => Promise
           leaseTtlMs: () => live.ttl,
         });
         disposers.push(workspace.dispose);
-        disposers.push(mountLibraOutbox(ctx, bridge, {
-          ...(deployment.outboxRoot !== undefined ? { outboxRoot: deployment.outboxRoot } : {}),
-        }));
-        runtime = {
-          dispose: async () => {
-            for (const dispose of disposers.reverse()) {
-              try {
-                await dispose();
-              } catch {
-                // contained: each layer is best-effort on shutdown
-              }
-            }
-            if (connected) await bridge.close().catch(() => undefined);
-          },
-        };
+        runtime = { dispose: shutdown };
       } catch (error) {
-        for (const dispose of disposers.reverse()) {
-          try {
-            await dispose();
-          } catch {
-            // contained: a failed mount must not mask the original error
-          }
-        }
-        if (connected) await bridge.close().catch(() => undefined);
+        await shutdown();
         throw error;
       }
     })().finally(() => {

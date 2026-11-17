@@ -64,7 +64,7 @@ export function mountLibraContext(
     injected.add(sessionId);
     if (slice.text.length === 0) return decision;
     return {
-      kind: "enter",
+      ...decision,
       messages: [...decision.messages, contextMessage(slice.text, options.pluginName)],
     };
   }));

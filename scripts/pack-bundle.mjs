@@ -29,7 +29,7 @@ try {
   const manifest = JSON.parse(readFileSync(join(stagingPath, "package.json"), "utf8"));
   const archiveName = `${String(manifest.name).replace(/^@/, "").replaceAll("/", "-")}-${String(manifest.version)}.tgz`;
   const archivePath = join(destination, archiveName);
-  const packed = spawnSync("corepack", ["pnpm", "pack", "--pack-destination", destination], {
+  const packed = spawnSync("pnpm", ["pack", "--pack-destination", destination], {
     cwd: stagingPath,
     encoding: "utf8",
     shell: false,

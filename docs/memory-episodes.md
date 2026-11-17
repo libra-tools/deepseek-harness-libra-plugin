@@ -1,6 +1,6 @@
 # Libra Memory integration
 
-Memory is one capability of the Libra profile plugin. Harness owns the turn lifecycle; Libra owns selection, generation, and durable storage. The bundle delivers recall results and optionally captures completed turns through the bridge.
+Memory is one capability of the Libra profile plugin. Harness owns the turn lifecycle; Libra owns selection and storage. The bundle delivers recall results and can optionally capture completed turns through a compatible bridge. The new local conversation-memory implementation uses bounded lexical selection and redacted local records; it does not invoke a model or generate a structured note. The compiler-backed implementation described in the historical verification section is a different development revision.
 
 ## Recall and lifecycle
 
@@ -22,22 +22,29 @@ Enable the optional module on the Cordis bundle entry:
 }
 ```
 
-Use a Libra build supporting Bridge `1.2` and a repository with an initial code
-commit. Supply `DEEPSEEK_API_KEY` to DSH, or configure the normal Libra repository
-credentials. The plugin passes the key only to its generation-enabled bridge.
+For the new local implementation, use a Libra build advertising Bridge `1.2`
+and explicitly enable the repository-local setting `bridge.conversationMemory`
+with the value `true`. Both the Libra setting and `captureMemoryEpisodes` must
+be enabled for capture. With the setting disabled, recall returns an empty
+delivery and recording is refused without creating a memory database.
 
-For each successful turn, the first recall captures starting HEAD. At completion,
-Libra records the accepted query, final assistant answer, and terminal HEAD as
-canonical history evidence, then runs the current Episode compiler and Memory
-writer. The following recall waits for this operation. Algorithm changes in
-Libra are therefore exercised without moving the implementation into the plugin.
+After a successful turn, the new bridge stores the accepted query and final
+assistant answer in a separate private repository-local database. Searches use
+bounded literal keywords and can return records from other sessions in the same
+repository; they are not semantic search. The following recall waits for capture
+settlement. This implementation does not call a model provider, persist a
+selection receipt, create a structured Memory note, or freeze a starting HEAD.
 
-The structured Memory note is stored as a repository object. `.libra/libra.db`
-holds its note/revision indexes, live head, search document and FTS postings,
-compile job state, and context selection receipts. Search projections are not a
-replacement for the canonical Memory note.
-
-Capture is best-effort and can incur a compiler model request per successful turn. Failed, aborted, blocked, and truncated turns are skipped; tool traces, later steering, and historical replay are not captured. There is no durable retry queue. The next recall and Harness's `session/flush` wait for capture settlement, but a settled flush does not guarantee a stored note. See [privacy](privacy.md) for storage and provider-processing boundaries.
+Capture is best-effort. Failed, aborted, blocked, and truncated turns are
+skipped; tool traces, later steering, and historical replay are not captured.
+The local store bounds a goal to 4,096 UTF-8 bytes and a response to 16,384
+bytes. The plugin truncates longer inputs at UTF-8 character boundaries,
+adds an explicit truncation marker and logs only the session, turn, field and
+original byte count; a truncated record is not a complete transcript. Direct
+bridge callers that exceed the limits are rejected. There is no durable capture retry queue.
+A settled Harness `session/flush` does not guarantee a stored record. See
+[privacy](privacy.md) for data handling, redaction and retention limits. Older
+compiler-backed bridges can have different setup and provider requirements.
 
 ## Reproducible generation gate
 
@@ -86,18 +93,13 @@ test was run. Configuration and protocol authority remained development changes
 at the time of this receipt. The [Cordis refactor receipt](release-evidence-CORDIS-20260907.md)
 records the subsequent fixed authority, real type/lifecycle gates and new model run.
 
-## Current capture limits
+## Capture limits
 
-Capture currently skips failed, aborted, blocked, and truncated turns. It does
-not collect tool traces, regenerate queries for later steering, or replay old
-turns on remount. There is no durable capture retry queue; a failed capture is
-reported as a warning (subject to DSH's exporter levels), and manually resubmitting a record can create another
-Episode. Only the accepted query and final assistant text are generation inputs.
-Canonical history timestamps describe Libra ingestion; full DSH turn timing is
-not projected yet. Episode generation has no client total-duration cap. With
-the matching Libra inactivity-watchdog update, 60 seconds without nonempty
-thinking or text output ends the request; ongoing output renews that timer.
-Older Libra builds still enforce their own hard server deadline. No bridge
-method has a client total-duration cap after initialization. A silent initial
-handshake is bounded to 60 seconds by default. Closing the plugin or a bridge
-child exit still rejects pending generation requests.
+Capture skips failed, aborted, blocked, and truncated turns. It does not collect
+tool traces, regenerate queries for later steering, or replay old turns on
+remount. There is no durable capture retry queue; a failed capture is reported
+as a warning, and a settled flush does not prove storage succeeded. The new
+local store treats a repeat of the same session and turn as idempotent only
+when the redacted contents match. The client bounds its initial handshake but
+not later requests; the server's own deadline still applies. Closing the bridge
+or a child exit rejects pending requests.

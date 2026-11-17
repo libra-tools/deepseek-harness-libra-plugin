@@ -40,42 +40,35 @@ configuration normalization.
 ## Current entry and protocol authority
 
 The receiver fixture records Bridge `1.2` from Libra
-`a92b29e8fc9ad514ebe2e6c53216845aa059d94f`. The current bundle calls session
-open/close, Memory recall, and opt-in Episode record. Other methods remain in
-the protocol fixture because they are bridge capabilities, not because this
-bundle exposes them as model tools. The previous transcript outbox was removed;
-the bundle does not call wire `event.append` or `session.flush`.
+`a92b29e8fc9ad514ebe2e6c53216845aa059d94f`. The current bundle registers
+Libra tools and uses the bridge for session lifecycle, context and workspace
+leases. It also projects DSH session events through a local outbox, using wire
+`event.append` and `session.flush`. Memory recall and opt-in Episode capture
+are mounted only when the negotiated peer advertises the required methods.
 
-DSH's `session/flush` hook is a different interface: the plugin waits for its
-pending Episode capture through that native hook.
+DSH's `session/flush` hook is a separate, parallel durability checkpoint: the
+plugin waits for pending capture and outbox work through that native hook.
 
-## Memory Episode generation extension (`1.2`)
+## Conversation Episode record extension (`1.2`)
 
-The additive `memory.episode.record` method accepts only
-`{session_id, turn, goal, response_text}`. It requires the same process-active,
-repository-scoped session as recall. The opt-in bundle forwards the accepted
-query and final assistant text from a successful DSH `turn/end` event.
-Libra owns the compiler model, canonical history evidence, policy, admission,
-and SQLite projections; callers cannot supply a Memory note or code revision.
+The new local conversation-memory implementation accepts
+`memory.episode.record` parameters `{session_id, turn, goal, response_text}`.
+The opt-in bundle forwards the accepted query and final assistant text from a
+successful DSH `turn/end` event. The repository-local setting
+`bridge.conversationMemory=true` must also be enabled. The new implementation
+stores bounded, redacted text locally; it does not call a model provider or
+generate a Memory note or revision.
 
-Success returns `{schema_version: 1, data: {task_id, note_id, revision_oid}}`
-after the generated Episode has been persisted. When capture is enabled, the
-bundle adds the optional positive `turn` field to `memory.recall`; Libra freezes
-the starting HEAD once for that turn (including compaction refreshes). Recording
-requires this matching turn anchor and reads the terminal HEAD server-side.
-Enable generation at bridge startup
-with `LIBRA_DSH_MEMORY_MODEL`; model credentials resolve through Libra's normal
-DeepSeek provider configuration. The bundle sets this variable when
-`captureMemoryEpisodes` is enabled. The client imposes no total-duration cap on
-`memory.episode.record`: Libra must enforce inactivity using its model stream
-(60 seconds without nonempty thinking/text output in the matching update).
-All methods delegate inactivity handling to Libra after initialization; the
-initial handshake has a 60-second silence limit. The legacy server field
-`request_deadline_secs` describes the inactivity window in the matching update.
-Child exit and explicit close continue to cancel pending requests. Older servers retain their own
-hard request deadline; this client change cannot override it.
-Recording is not idempotent across manual retries; do not replay a completed
-record request as an automatic transport retry.
+Success returns `{schema_version: 1, data: {recorded, content_hash, turn}}`.
+Repeated records with the same session and turn are idempotent when their
+redacted contents match; a conflicting replay is rejected. The older Bridge
+1.2 development fixture describes a different compiler-backed implementation;
+its generated notes and receipts are not claims about this implementation.
+
+The client bounds its initial handshake but imposes no total-duration cap on
+subsequent requests. The server's request deadline, child exit and explicit
+close still apply. A completed DSH flush indicates capture settled; it does not
+by itself guarantee that the record was stored.
 
 ## Memory recall extension (`1.1`)
 

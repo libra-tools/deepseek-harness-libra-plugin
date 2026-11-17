@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { chmodSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -168,11 +169,13 @@ describe("degraded activation", () => {
     const previous = process.env.PATH;
     process.env.PATH = `${dirname(wrapper)}${delimiter}${previous ?? ""}`;
     const harness = makeContext();
+    const outboxRoot = mkdtempSync(join(tmpdir(), "libra-outbox-path-"));
     let dispose: (() => Promise<void>) | undefined;
     try {
       dispose = await apply(harness.ctx, {
         libraExecutable: "fake-bridge-wrapper.sh",
         repositoryRoot: repoRoot,
+        outboxRoot,
       });
       expect(harness.warnings).toEqual([]);
       expect(harness.listenersOf("agent/pre-step").length).toBeGreaterThan(0);
@@ -180,6 +183,7 @@ describe("degraded activation", () => {
       if (previous === undefined) delete process.env.PATH;
       else process.env.PATH = previous;
       await dispose?.();
+      rmSync(outboxRoot, { recursive: true, force: true });
     }
   });
 });

@@ -198,9 +198,9 @@ describe("context injection", () => {
 
     const first = await preStep(
       { agent: { session: makeSession("c-1") }, turn: 1, step: 1, signal: new AbortController().signal },
-      async () => ({ kind: "enter", messages: [user("probe")] }),
+      async () => ({ kind: "enter", messages: [user("probe")], startsRequestSeries: true }),
     );
-    expect(first.kind).toBe("enter");
+    expect(first).toMatchObject({ kind: "enter", startsRequestSeries: true });
     const injected = (first as { kind: "enter"; messages: TestMessage[] }).messages.at(-1);
     expect(injected?.source.kind).toBe("libra-context");
     expect(injected?.content[0]?.text).toContain("decision summary");

@@ -172,7 +172,7 @@ export class OutboxStore {
       if (status === "conflict" || status === "rejected") {
         entry.state = "rejected";
         entry.last_error = `bridge event status: ${status}`;
-      } else if (entry.event_seq <= lastAckedSeq || status === "accepted" || status === "duplicate") {
+      } else if (status === "accepted" || status === "duplicate") {
         entry.state = "acked";
       }
     }
@@ -252,13 +252,13 @@ export class OutboxStore {
   }
 
   private persist(snapshot: OutboxSnapshot): void {
-    this.snapshots.set(snapshot.session_id, snapshot);
     const path = this.pathFor(snapshot.session_id);
     mkdirSync(dirname(path), { recursive: true });
     const tmp = `${path}.tmp`;
     writeFileSync(tmp, JSON.stringify(snapshot), { encoding: "utf8", mode: 0o600 });
     chmodSync(tmp, 0o600);
     renameSync(tmp, path);
+    this.snapshots.set(snapshot.session_id, snapshot);
   }
 
   private pathFor(sessionId: string): string {

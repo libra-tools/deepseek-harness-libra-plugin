@@ -21,10 +21,10 @@ When loaded into a Harness profile, the bundle:
 The bundle composes five bridge-backed layers into one Cordis context (one
 shared bridge child process, closed once by the bundle disposer):
 
-1. **Memory recall** — on an accepted DSH turn, requests an audited prompt
-   section from Libra (`memory.recall`) and attaches it to the model request
-   with receipt/content hashes. Libra remains responsible for selection,
-   policy, budgeting, and receipt persistence. Visible deliveries are tracked
+1. **Memory recall** — when the bridge advertises `memory.recall`, requests a
+   bounded section for an accepted DSH turn and attaches it to the model request
+   with receipt/content hashes. The new local implementation uses lexical
+   selection and does not persist a selection receipt. Visible deliveries are tracked
    through a durable session projection (`libraMemory`) so retirement survives
    compaction; hosts without `sessionProjections` fall back to a surface scan.
 2. **Tools** — the allowlisted catalog below is registered as first-party DSH
@@ -44,7 +44,7 @@ shared bridge child process, closed once by the bundle disposer):
 ```
 ┌─────────────────────┐     NDJSON JSON-RPC      ┌──────────────────────────┐
 │  DeepSeek Harness   │ ◄──────────────────────► │  libra agent bridge      │
-│  (agent loop, UI,   │   stdin / stdout         │  --stdio (Libra 0.30.205) │
+│  (agent loop, UI,   │   stdin / stdout         │  --stdio                  │
 │   approval policy)  │                          └────────────┬─────────────┘
 └──────────┬──────────┘                                       │
            │ @libra-tools/dsh-bundle                           │ Rust bridge
@@ -57,8 +57,9 @@ shared bridge child process, closed once by the bundle disposer):
      local outbox (redaction, batching)
 ```
 
-The Memory module and the rest of the plugin are validated together against
-DeepSeek Harness `0.2.2-rc.3` and Libra Agent Bridge protocol `1.1`. See
+Memory requires a Libra bridge that advertises the relevant methods. Libra
+Bridge `1.0` does not provide Memory; the new local implementation requires
+repository-local opt-in and a compatible development build. See
 [compatibility.md](docs/compatibility.md) for the compatibility record.
 
 ## Requirements
@@ -67,7 +68,7 @@ DeepSeek Harness `0.2.2-rc.3` and Libra Agent Bridge protocol `1.1`. See
 | --- | --- |
 | Node.js | `>= 24.9` |
 | DeepSeek Harness | `0.2.2-rc.3` (`@deepseek-ai/dsh`, Node `>=24.9`) |
-| Libra | `0.30.205` with `agent bridge --stdio` (protocol 1.0) |
+| Libra | A build with `agent bridge --stdio`; Memory requires the negotiated extension methods and repository-local opt-in |
 | Repository | Libra-initialized worktree (`libra init`) |
 
 Peer dependencies at runtime (all optional; provided by Harness):
@@ -84,14 +85,16 @@ The bundle loads with a minimal config; every key is optional:
 | --- | --- | --- |
 | `libraExecutable` | `LIBRA_BINARY` env | Absolute path, relative path, or a name on `PATH`. When neither is set, or the file cannot be executed, the plugin stays inactive (nothing is spawned; a warning is logged). |
 | `repositoryRoot` | `LIBRA_REPO` env, else cwd | Libra-initialized worktree the bridge operates in. |
-| `outboxRoot` | `$DSH_HOME/libra/outbox` | Durable outbox directory for the session-event projection (outside the repository). Applied when the plugin loads. |
+| `outboxRoot` | `$DSH_HOME/libra/outbox` | Repository-scoped, generation-isolated event queues and per-session SQLite coordination locks (outside the repository). Applied when the plugin loads. |
 | `injectContext` | `true` | Inject one bounded `libra_context` snapshot on the first turn. |
 | `workspaceLeaseTtlMs` | `30000` | Workspace lease TTL; the bundle renews at half the TTL. |
 | `memoryTokenBudget` | `0` (Libra decides) | Positive values are sent to `memory.recall` as `token_budget`. The plugin does not truncate a section after its hash is checked. |
+| `captureMemoryEpisodes` | `false` | Send the accepted query and final answer to a compatible bridge after a successful turn. The new local store also requires repository-local `bridge.conversationMemory=true`. |
+| `memoryModel` | `deepseek-chat` | Forwarded for older compiler-backed bridges; the new local store does not call a model. |
 
-On the Plugins page, this bundle's configuration edits the same fields. The binary path is deployment configuration and is never a model-visible parameter. A changed binary or repository is used on the next bridge request. The other fields apply when the plugin loads.
+On the Plugins page, this bundle's configuration edits the same fields. The binary path is deployment configuration and is never a model-visible parameter. Changing the binary or repository requires reloading the plugin; existing sessions are not silently moved to another repository. Capture and other mount-time fields apply when the plugin loads.
 
-This plugin does not replace the built-in changed-files card (`dsh-workspace-changes`) or a general memory plugin such as `dsh-mnemon` / `dsh-plugin-memory`. Those may stay enabled. Libra owns repository checkpoints, commits, leases, and audited recall; the others own turn diffs or their own memory stores. If more than one plugin injects a user message on the first turn, Harness keeps both; Libra's section is the one whose source kind is `libra-memory` or `libra-context`.
+This plugin does not replace the built-in changed-files card (`dsh-workspace-changes`) or a general memory plugin such as `dsh-mnemon` / `dsh-plugin-memory`. Those may stay enabled. Libra owns repository checkpoints, commits, leases and its own Memory storage; the others own turn diffs or their own memory stores. If more than one plugin injects a user message on the first turn, Harness keeps both; Libra's section is the one whose source kind is `libra-memory` or `libra-context`.
 
 ## Install
 
@@ -99,15 +102,17 @@ This plugin does not replace the built-in changed-files card (`dsh-workspace-cha
 
 This revision is an unreleased update to the existing bundle. Build a development tarball to use the source documented here; no new npm release is claimed.
 
-The repository root and `packages/bundle` workspace manifest are not standalone install targets. Prepare an installed checkout of the exact DSH pin, then build the self-contained artifact:
+The repository root and `packages/bundle` workspace manifest are not standalone install targets. Build the self-contained artifact in the workspace:
 
 ```sh
 pnpm install --frozen-lockfile
-DSH_CHECKOUT=/absolute/path/to/pinned/deepseek-harness pnpm prepare:dsh
 pnpm check
 pnpm pack:bundle -- --destination /absolute/path/to/artifacts
-dsh plugin --profile headless add /absolute/path/to/artifacts/libra-tools-dsh-bundle-0.1.0.tgz
+dsh plugin --profile headless add /absolute/path/to/artifacts/libra-tools-dsh-bundle-0.2.0.tgz
 ```
+
+The separate `test:lifecycle` and `test:integration` scripts target a historical
+DSH alpha.1 checkout and are not evidence for DSH `0.2.2-rc.3`.
 
 Configure the inserted `libra` entry with deployment-owned paths:
 
@@ -158,22 +163,22 @@ The installable artifact is `@libra-tools/dsh-bundle`. Internal packages are com
 
 - **Bridge-only:** no direct `.libra/` database or object store access from TypeScript.
 - **Fail-closed:** protocol major mismatch, actor/lease conflict, redaction uncertainty, and forbidden model parameters (e.g. `actor`, `repository_root`, `database_path`) are rejected.
-- **Redaction:** secrets and oversized payloads are blocked or stripped before outbox persistence and UI projection; failures retain diagnostic state instead of falling back to raw text.
-- **Actor binding:** `deepseek-harness:<session_id>` is derived by the authenticated Libra bridge session; model-supplied identity fields are rejected.
+- **Redaction:** known secret patterns and oversized payloads are blocked or stripped before outbox persistence; pattern-based checks cannot guarantee removal of all secrets or personal information.
+- **Actor binding:** the plugin derives `deepseek-harness:<session_id>` from the caller's session and rejects model-supplied identity fields. The local bridge trusts its stdio host and repository context; a session ID is not an authentication credential.
 
 Details: [docs/security.md](docs/security.md), [docs/privacy.md](docs/privacy.md).
 
 ## Protocol authority
 
-Libra Rust bridge (`libra/src/internal/ai/agent_bridge/`) is the authoritative source for methods, limits, error codes, and handshake semantics. Current Libra is `0.30.205` and speaks bridge protocol `1.0`. This repository still stores an older receiver fixture at `protocol/agent-bridge.v1.schema.json` (recorded against libra `0.21.25`, protocol `1.1`); that fixture has not been re-signed against `0.30.205`.
+The Libra Rust bridge (`libra/src/internal/ai/agent_bridge/`) owns its actual methods, limits, error codes and handshake semantics. The receiver fixture in `protocol/agent-bridge.v1.schema.json` records an older protocol `1.2` development revision; it must not be treated as proof that an installed binary supports Memory. Check the peer's negotiated method list and the compatibility record.
 
-Transport summary: one JSON-RPC 2.0 object per NDJSON line on stdout; stderr for diagnostics; 256 KiB frame cap; 30 s default deadline.
+Transport summary: one JSON-RPC 2.0 object per NDJSON line on stdout; stderr for diagnostics. The client bounds the handshake and plugin shutdown; ordinary bridge requests are not assigned an artificial total deadline.
 
 See [docs/protocol/agent-bridge-v1.md](docs/protocol/agent-bridge-v1.md).
 
 ## Development
 
-Prepare the pinned Harness declarations as shown above before running checks.
+Run the local checks against the workspace dependencies. Real Libra/DSH integration gates require separately configured test environments.
 
 ### Verification matrix
 
