@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,6 +20,9 @@ await build({
     "@deepseek-ai/dsh-agent",
     "@deepseek-ai/dsh-llm",
     "@deepseek-ai/dsh-session",
+    "@deepseek-ai/dsh-tools",
+    "@deepseek-ai/dsh-user-approval",
+    "@deepseek-ai/dsh-session-projection",
     "@deepseek-ai/schemastery",
   ],
   sourcemap: true,
@@ -29,13 +32,8 @@ if (!existsSync(protocolSource)) {
   throw new Error("protocol fixture directory is missing; cannot build a self-contained bundle");
 }
 cpSync(protocolSource, protocolTarget, { recursive: true });
-// Ship only the public declaration closure, not internal bridge-client types.
-for (const file of ["index.d.ts", "config.d.ts", "memory-source.d.ts"]) {
-  cpSync(join(root, "packages/bundle/lib", file), join(root, "packages/bundle/dist", file));
-}
-for (const file of ["memory.d.ts", "memory-delivery.d.ts"]) {
-  rmSync(join(root, "packages/bundle/dist", file), { force: true });
-}
+// Ship the public entry declaration, not internal bridge-client types.
+cpSync(join(root, "packages/bundle/lib/index.d.ts"), join(root, "packages/bundle/dist/index.d.ts"));
 
 const publishable = {
   ...pkg,
@@ -46,10 +44,13 @@ const publishable = {
       types: "./dist/index.d.ts",
       default: "./dist/index.js",
     },
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",
   },
-  files: ["dist", "cordis.patch.yml", "README.md", "LICENSE"],
+  files: ["dist", "client.js", "locale", "icon.svg", "cordis.patch.yml", "README.md", "LICENSE"],
   dependencies: {},
   peerDependencies: pkg.peerDependencies,
   peerDependenciesMeta: pkg.peerDependenciesMeta,

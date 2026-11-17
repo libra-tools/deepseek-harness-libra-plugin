@@ -1,0 +1,27 @@
+{
+  "meta": {
+    "title": "Libra bridge",
+    "description": "Connects this Harness profile to a local Libra repository through libra agent bridge --stdio (protocol 1.0, Libra 0.30.205). Open Plugins, then this bundle, to set the Libra binary, repository, outbox directory, context injection, workspace lease, and memory token budget. The binary is deployment configuration and is never a model parameter. With no usable binary the plugin stays inactive and does not spawn a process. Write and restore tools ask through Harness approval. Libra checkpoints, commits, leases, and audited memory are separate from the built-in changed-files card and from general memory plugins such as dsh-mnemon; those can stay enabled."
+  },
+  "settings": {
+    "summaryEmpty": "Libra bridge is not configured.",
+    "summaryReady": "Libra binary {binary}",
+    "title": "Libra bridge",
+    "intro": "These values are deployment settings. The model cannot see or change the binary path. A new binary or repository is used on the next bridge request. Outbox directory, context injection, lease, and memory budget apply when the plugin loads.",
+    "binary": "Libra binary",
+    "binaryHint": "Absolute path, relative path, or a name on PATH. Empty leaves the plugin inactive.",
+    "repository": "Repository root",
+    "repositoryHint": "Libra-initialized worktree. Empty uses LIBRA_REPO or the working directory.",
+    "outbox": "Outbox directory",
+    "outboxHint": "Durable session-event outbox outside the repository. Empty uses $DSH_HOME/libra/outbox.",
+    "inject": "Inject repository context on the first turn",
+    "lease": "Workspace lease (ms)",
+    "budget": "Memory token budget",
+    "budgetHint": "0 lets Libra choose the budget. A positive value is sent to memory.recall; this plugin does not cut the returned text.",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved. Binary and repository changes apply on the next bridge request.",
+    "failed": "Could not save these settings.",
+    "unavailable": "Settings are unavailable in this profile. Set libraExecutable in the bundle configuration instead."
+  }
+}

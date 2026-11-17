@@ -65,10 +65,11 @@ function requestKey(id: number | string | null | undefined): string {
 
 export class BridgeClient {
   private state: InternalState | null = null;
-  private readonly config: BridgeClientConfig;
+  private config: BridgeClientConfig;
   private readonly receiver: ProtocolReceiverState;
   private requestTail: Promise<void> = Promise.resolve();
   private queuedRequests = 0;
+  private connecting: Promise<InitializeResult> | undefined;
 
   constructor(config: BridgeClientConfig, receiver?: ProtocolReceiverState) {
     this.config = normalizeBridgeConfig(config);
@@ -88,10 +89,37 @@ export class BridgeClient {
   }
 
   async connect(): Promise<InitializeResult> {
-    if (this.state) {
-      return this.handshakeFromOpenConnection();
+    if (this.state?.negotiated) return this.state.negotiated;
+    if (this.connecting) return this.connecting;
+    const pending = this.openConnection();
+    this.connecting = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.connecting === pending) this.connecting = undefined;
     }
+  }
 
+  /**
+   * Point an existing client at another binary or repository. A second
+   * `initialize` is sent only after the previous child has been closed.
+   * Same target and an existing handshake return the negotiated result.
+   */
+  async retarget(next: BridgeClientConfig): Promise<InitializeResult> {
+    const normalized = normalizeBridgeConfig(next);
+    if (
+      this.state?.negotiated
+      && this.config.executable === normalized.executable
+      && this.config.cwd === normalized.cwd
+    ) {
+      return this.state.negotiated;
+    }
+    await this.close();
+    this.config = normalized;
+    return this.connect();
+  }
+
+  private async openConnection(): Promise<InitializeResult> {
     const child = spawn(this.config.executable, [...this.config.args ?? []], {
       cwd: this.config.cwd,
       env: this.config.env ?? {},

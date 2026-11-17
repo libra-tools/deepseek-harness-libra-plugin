@@ -5,7 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@10.13.1",
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": ">=24.9.0"
   },
   "scripts": {
     "prepare:dsh": "node scripts/prepare-dsh-types.mjs",
@@ -20,8 +20,8 @@
     "test:integration": "node scripts/test-integration.mjs"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/schemastery": "3.18.1",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/schemastery": "3.19.0",
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
     "esbuild": "^0.28.2",

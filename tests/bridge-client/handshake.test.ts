@@ -50,6 +50,14 @@ describe("bridge-client handshake", () => {
     expect(records.some((r) => r.method === "initialize" && r.state === "success")).toBe(true);
   });
 
+  it("reuses the negotiated handshake instead of sending initialize again", async () => {
+    client = makeClient();
+    await client.connect();
+    await client.connect();
+    const initializations = client.listRequests().filter((record) => record.method === "initialize");
+    expect(initializations).toHaveLength(1);
+  });
+
   it("rejects arbitrary argv mutations", () => {
     expect(() =>
       normalizeBridgeConfig({

@@ -1,36 +1,29 @@
 # Libra profile setup
 
-Use DSH `v0.1.2-alpha.1` at `cd5ef8148158c3a752a658978873241fdf8e2bbc`. Build and pack the workspace as described in the [README](../README.md), then install the tarball:
-
-```sh
-dsh plugin --profile headless add /absolute/path/to/libra-tools-dsh-bundle-0.1.0.tgz
-dsh --profile headless --dump-config
+```bash
+DSH_CLI="/absolute/path/to/pinned/dsh-v0.2.2-rc.3"
+"$DSH_CLI" plugin --profile libra add file:/tmp/libra-dsh-bundle-<run>
+"$DSH_CLI" --profile libra --dump-config
 ```
 
-The bundle patch inserts an entry with ID `libra` and name `@libra-tools/dsh-bundle`. Harness supplies its native `agents` and `sessions` services; missing required services prevent Cordis from activating the entry.
+The `libra` profile installs `@libra-tools/dsh-bundle`, which registers the Cordis layer `libra`. The bundle starts `libra agent bridge --stdio` after a pinned DSH host supplies the lifecycle adapter; without that host capability it reports `degraded-no-host`. When no `libraExecutable`/`LIBRA_BINARY` is configured the bundle activates inertly (nothing is spawned) instead of failing the composition.
 
-## Bridge configuration
+Required: Libra repository initialized (`libra init`) and Libra binary on PATH or configured explicitly.
 
-Set the executable and repository paths in the inserted `libra` entry. These are deployment settings, not model-controlled parameters.
+## Development profile
 
-| Config | Meaning |
-| --- | --- |
-| `libraExecutable` | Absolute executable path; fallback `LIBRA_BINARY` |
-| `repositoryRoot` | Existing directory; fallback `LIBRA_REPO`, then current directory |
+Build and pack the workspace bundle, then install the tarball into a DSH profile:
 
-Use a Libra-initialized repository and the [pinned Bridge 1.2 build](../compatibility/harness-alpha1.md).
+```bash
+pnpm build
+pnpm pack:bundle
+dsh plugin --profile headless add /absolute/path/to/libra-tools-dsh-bundle-0.2.0.tgz
+```
 
-## Optional capability settings
-
-Recall is active when the bundle is loaded. Episode capture is disabled by default:
-
-| Config | Meaning |
-| --- | --- |
-| `captureMemoryEpisodes` | Defaults to `false`; opt in to compiler calls and generation input storage |
-| `memoryModel` | Libra compiler model; defaults to `deepseek-chat` |
-
-Capture also needs an existing code commit and provider credentials. See [Memory integration](memory-episodes.md) for setup, behavior, and costs.
-
-## Verify installation
-
-`--dump-config` proves composition only. The integration gate runs the installed artifact and checks its database receipt. See [Memory testing](memory-episodes.md). The current development tarball has not been published to npm.
+Configure `libraExecutable` with an absolute path, a relative path, or a `PATH` name for a Libra binary that advertises
+Agent Bridge protocol `1.1`, and set `repositoryRoot` to an initialized Libra
+repository. The plugin can also read these values from `LIBRA_BINARY` and
+`LIBRA_REPO`. Optional knobs: `outboxRoot`, `injectContext` (default `true`),
+`workspaceLeaseTtlMs`, and `memoryTokenBudget` (see the README configuration
+table). Optional Episode capture stays off unless `captureMemoryEpisodes` is
+true; `memoryModel` defaults to `deepseek-chat`.
