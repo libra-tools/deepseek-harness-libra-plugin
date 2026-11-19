@@ -103,9 +103,4 @@ are not part of the minor-1 Libra allowlist.
 
 ## VCS write extension (LVC-06)
 
-Minor 2 adds `vcs.stage`, `vcs.unstage`, and `vcs.commit`. They require
-`operation_id`, literal repository-relative `paths`, and `expectedHead`,
-`expectedIndex`, and `expectedWorktree`. A mismatch returns `stale_state`
-before any index or commit write. Replaying the same `operation_id` and
-payload returns the recorded outcome. `commit.create` is unchanged. These
-methods are not exposed in the Host UI or Agent tools until LVC-07.
+**Do not use the experimental `vcs.stage`, `vcs.unstage`, and `vcs.commit` methods.** Codex implementation review found that their fence does not reliably detect changed content or concurrent writes, paths can expand as pathspecs, and commit can include unselected staged files. Replay after an interrupted commit is also unsafe. The LVC-02/LVC-06 implementation is under correction; an advertised method does not establish that it is safe or released. `commit.create` retains its existing contract. See the LVC-02 / LVC-06 implementation review in the version-control plan.
