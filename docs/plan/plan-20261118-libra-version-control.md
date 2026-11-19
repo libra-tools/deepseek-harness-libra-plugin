@@ -220,7 +220,7 @@
 | DEP-ID | 提供方 | 消费方 | 产物 | 状态 |
 |---|---|---|---|---|
 | DEP-01 | LVC-01 | LVC-02, LVC-03 | frozen DSH/Libra contracts and repository-binding rules | frozen |
-| DEP-02 | LVC-02 | LVC-04, LVC-05, LVC-06 | negotiated typed read contract and generated fixture/TS types | landed on Libra `3a22517`; plugin schema lists the five methods |
+| DEP-02 | LVC-02 | LVC-04, LVC-05, LVC-06 | negotiated typed read contract and generated fixture/TS types | incomplete: commits landed but implementation and provenance require correction and review |
 | DEP-03 | LVC-03 | LVC-04, LVC-05, LVC-07, LVC-08 | per-Session binding and per-repository bridge service | planned |
 | DEP-04 | LVC-04 | LVC-05 | Host read service and readonly tool contracts | planned |
 | DEP-05 | LVC-05 | LVC-07 | read-only panel shell and selected-session UI context | planned |
@@ -302,9 +302,9 @@
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `in-progress` / `locally-accepted`
+**Lifecycle / Acceptance:** `in-progress` / ` `
 
-**Description:** 在 Libra bridge 增加协商式、分页且有界的仓库 identity/status、diff 与 commit history/detail 查询，复用 Libra VCS 核心。行为轴：只读 VCS 状态合同。实现已在 Libra `3a22517`。`done` / `complete` 仍要等 REL-01（LVC-06 之后的 bridge 发布）。
+**Description:** 在 Libra bridge 增加协商式、分页且有界的仓库 identity/status、diff 与 commit history/detail 查询，复用 Libra VCS 核心。Libra `3a22517` 需要实现级 review 和修复；此前的 locally-accepted 声明撤销。现有插件 fixture 的历史 authority receipt 未证明新增方法来自其标注的旧 revision，须重新建立可验证的来源。REL-01 在这些门通过前不得发布。
 
 **Out of scope:** plugin Host/Agent tool integration（LVC-04）及 Client panel（LVC-05）；所有写方法（LVC-06）；Git。
 
@@ -312,18 +312,18 @@
 
 **Acceptance criteria:**
 
-- [x] 新增协议能力是 additive/minor-negotiated；旧 1.x peer 的既有行为不变，未知/未协商方法 fail closed。
-- [x] Status 返回 repo identity、branch/HEAD/unborn 与分页状态项，区分 staged/unstaged/untracked/conflict/rename；无仓库与能力不足是结构化状态，不能伪装为空仓。
-- [x] Log/detail 有 cursor pagination；diff 使用封闭 comparison enum 和 repo-relative path；binary/oversized/truncated 明示；响应 obey method/frame/page/byte limits。
-- [x] 值全部来自 Libra 核心服务，禁止 SQL 直读、外部 `git` 进程、shell 文本解析或任意 revision/path。
-- [x] 同步 Libra protocol fixture/schema、compatibility record、tests index 与相关 developer/command docs；注明 `status.get` 仍是 bridge telemetry。
-- [x] ER-06/ER-12/ER-14：本卡同卡更新 Libra developer/protocol docs、plugin protocol schema 与 receiver contract；plugin README/site guide 为 N/A，理由是 Host/UI 尚未公开消费这些方法（由 LVC-04/05 在可用 slice 更新）；CLI command docs 已更新，因为 `libra agent bridge` 的方法清单变了。每项判定按仓记录。
+- [ ] 新增协议能力是 additive/minor-negotiated；旧 1.x peer 的既有行为不变，未知/未协商方法 fail closed。
+- [ ] Status 返回 repo identity、branch/HEAD/unborn 与分页状态项，区分 staged/unstaged/untracked/conflict/rename；无仓库与能力不足是结构化状态，不能伪装为空仓。
+- [ ] Log/detail 有 cursor pagination；diff 使用封闭 comparison enum 和 repo-relative path；binary/oversized/truncated 明示；响应 obey method/frame/page/byte limits。
+- [ ] 值全部来自 Libra 核心服务，禁止 SQL 直读、外部 `git` 进程、shell 文本解析或任意 revision/path。
+- [ ] 同步 Libra protocol fixture/schema、compatibility record、tests index 与相关 developer/command docs；注明 `status.get` 仍是 bridge telemetry。
+- [ ] ER-06/ER-12/ER-14：本卡同卡更新 Libra developer/protocol docs、plugin protocol schema 与 receiver contract；plugin README/site guide 为 N/A，理由是 Host/UI 尚未公开消费这些方法（由 LVC-04/05 在可用 slice 更新）；CLI command docs 已更新，因为 `libra agent bridge` 的方法清单变了。每项判定按仓记录。
 
 **Verification:**
 
-- [x] From Libra repo root: `cargo test --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test` (new cases marked `(new)` in existing targets; do not add a new test target unless this card also registers it and updates `tests/INDEX.md`).
-- [x] From Libra repo root: `cargo +nightly fmt --all --check`.
-- [x] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test -- -D warnings`. Full `--all-targets` still stops in pre-existing `tests/codex_capture_local_test.rs` (`queries overflow the depth limit`); that file was not changed.
+- [ ] From Libra repo root: `cargo test --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test` (new cases marked `(new)` in existing targets; do not add a new test target unless this card also registers it and updates `tests/INDEX.md`).
+- [ ] From Libra repo root: `cargo +nightly fmt --all --check`.
+- [ ] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test -- -D warnings`. Full `--all-targets` still stops in pre-existing `tests/codex_capture_local_test.rs` (`queries overflow the depth limit`); that file was not changed.
 
 **Full-suite trigger:** `T-1`: 跨 protocol、VCS、compatibility/schema surfaces 的公共 bridge 合同变更；最终全量门仍由收口阶段执行。
 
@@ -549,9 +549,9 @@
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `in-progress` / `locally-accepted`
+**Lifecycle / Acceptance:** `in-progress` / ` `
 
-**Description:** Add explicit local write operations to Libra bridge using Libra VCS core and concurrency fences. Behavior axis: safe index and commit mutations. Implementation is on Libra `6651ccf`. `done` / `complete` waits for REL-01, which is not cut yet.
+**Description:** Add explicit local write operations to Libra bridge using Libra VCS core and concurrency fences. Implementation on Libra `6651ccf` needs corrective work and review: its fence hashes only the first status page and is not atomic with mutations. Do not use the advertised write methods or cut REL-01 until those defects and the other acceptance criteria are verified.
 
 **Out of scope:** discard/reset, branch checkout, merge, push/pull/fetch; each is future plan due to destructive/remote semantics.
 
@@ -559,18 +559,18 @@
 
 **Acceptance criteria:**
 
-- [x] Add negotiated typed `stage`, `unstage`, and `commit` methods; no reinterpreting legacy `commit.create` semantics.
-- [x] Inputs are bounded repository-relative literal paths, action enum, idempotency `operation_id`, and expected HEAD/index/worktree fence; no raw ref/pathspec/revision string.
-- [x] Stale fence returns structured `stale_state` without mutation; repeated operation ID returns same recorded outcome; partial file failures identify each path.
-- [x] Commit result includes commit OID and exact affected paths; session/evidence linkage only if explicitly requested and bridge confirms it.
-- [x] No shell interpolation; operations call Libra internals, approval enforcement remains at the plugin/DSH boundary; bridge still validates repository scope.
-- [x] Same-card ER-06/ER-12/ER-14 updates Libra bridge/developer protocol docs, `tests/INDEX.md`, compatibility record, and plugin protocol schema/receiver docs. Add `(new)` cases to the existing `agent_bridge_vcs_test`, `agent_bridge_mutation_test`, `agent_bridge_approval_test`, and `agent_bridge_protocol_test` targets; do not add targets unless registered in this card. Plugin user guide and website page are N/A until UI/tool exposure in LVC-07. CLI docs were updated because `libra agent bridge` now advertises the three methods.
+- [ ] Add negotiated typed `stage`, `unstage`, and `commit` methods; no reinterpreting legacy `commit.create` semantics.
+- [ ] Inputs are bounded repository-relative literal paths, action enum, idempotency `operation_id`, and expected HEAD/index/worktree fence; no raw ref/pathspec/revision string.
+- [ ] Stale fence returns structured `stale_state` without mutation; repeated operation ID returns same recorded outcome; partial file failures identify each path.
+- [ ] Commit result includes commit OID and exact affected paths; session/evidence linkage only if explicitly requested and bridge confirms it.
+- [ ] No shell interpolation; operations call Libra internals, approval enforcement remains at the plugin/DSH boundary; bridge still validates repository scope.
+- [ ] Same-card ER-06/ER-12/ER-14 updates Libra bridge/developer protocol docs, `tests/INDEX.md`, compatibility record, and plugin protocol schema/receiver docs. Add `(new)` cases to the existing `agent_bridge_vcs_test`, `agent_bridge_mutation_test`, `agent_bridge_approval_test`, and `agent_bridge_protocol_test` targets; do not add targets unless registered in this card. Plugin user guide and website page are N/A until UI/tool exposure in LVC-07. CLI docs were updated because `libra agent bridge` now advertises the three methods.
 
 **Verification:**
 
-- [x] From Libra repo root, add `(new)` test functions to the existing targets and run: `cargo test --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test`.
-- [x] `cargo +nightly fmt --all --check`
-- [x] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test -- -D warnings`. Full `--all-targets` still stops in unchanged `tests/codex_capture_local_test.rs`.
+- [ ] From Libra repo root, add `(new)` test functions to the existing targets and run: `cargo test --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test`.
+- [ ] `cargo +nightly fmt --all --check`
+- [ ] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test -- -D warnings`. Full `--all-targets` still stops in unchanged `tests/codex_capture_local_test.rs`.
 
 **Full-suite trigger:** `T-1` and `T-5`: new public write protocol and explicit approval/fence contract.
 
@@ -947,6 +947,21 @@ No test command is claimed as run by this design plan.
 | 2026-11-19 | LVC-02 | Focused `cargo test` of the four bridge targets; `cargo +nightly fmt --all --check`; clippy on `--lib` and those tests | Libra `3a22517` on clean `main` | focused tests pass; fmt pass; targeted clippy pass | Full `--all-targets` clippy still dies in unchanged `tests/codex_capture_local_test.rs` (recursion limit). Original dirty checkout was not modified. |
 | 2026-11-19 | LVC-06 | `cargo test` of vcs/mutation/approval/protocol targets; fmt check; targeted clippy | Libra `6651ccf` | pass | `vcs_stage_replays_and_refuses_a_stale_fence` is the new fence test. REL-01 binary hash is not recorded yet. |
 
+### LVC-02 / LVC-06 实现复审（2026-11-19）
+
+Codex 对 Libra `771e994..6651ccf` 只读审查结论 **VERDICT: FAIL**，0 项通过声明；以下 8 项 P1 必须前滚修复、补充回归并复审通过后才能切 REL-01：
+
+1. 客户端无法通过协议读取写 fence；必须增加实际读到写的协议测试。
+2. worktree fence 仅哈希默认第一页的路径与状态，不包含文件内容，无法检测已修改文件的后续改动。
+3. fence 检查与实际写入没有共享原子边界，外部写者可在检查后改变状态。
+4. commit 发布后若关联或结果持久化失败，重试可能再次执行或永久停在 pending；须提供可恢复、可验证的幂等协议。
+5. 路径传给 add/restore 的 pathspec 解析器，通配符可扩大实际写入集合；必须使用字面路径并测试通配符文件名。
+6. `vcs.commit` 校验请求路径但提交整个 index，可能包含未经选择的文件；必须保证提交范围与授权范围一致。
+7. `vcs.show` 没有分页且根提交返回空文件列表，可能超出帧上限或误报；须支持根提交与有界分页。
+8. 握手只检查 major 并返回全局方法列表，未按连接协商 minor 并拒绝未协商方法。
+
+此前两次对用户所述“旧状态保证拒绝”和“locally-accepted”不成立；提交 `3a22517`、`6651ccf` 已推送 main，**不代表验收或发布成功**。另须修复插件 fixture 的历史 authority receipt：仅改 fixture hash 不能证明新增方法来自旧 revision。复审未运行测试；先前四个 focused 测试及 targeted clippy 结果仅证明当时运行的有限范围，不替代这些安全与契约验证。
+
 ## 修订历史
 
 | 日期 | 作者/评审 | 变更 | 结论 |
@@ -966,5 +981,5 @@ No test command is claimed as run by this design plan.
 | 2026-11-19 | LVC-01 draft | 写入「LVC-01 冻结合同」：DSH `0.2.2-rc.5` 的 tab/Remote/cwd 合同、Libra `771e994` 的发现函数与 20 方法 allowlist、proposed `vcs.*` schema。尚未完成本卡 Codex。 | 待审 |
 | 2026-11-19 | LVC-01 Codex | FAIL：1×P1。`try_get_storage_path` 的父目录在 linked worktree 上会落到主工作树。改为禁止该绑定；workdir 必须来自发现三元组第二项，并由 LVC-02 的 typed 方法返回；metadata cwd fail closed。 | 修复后再审 |
 | 2026-11-19 | LVC-01 Codex R2 | PASS on `46da7d71e7af16ee51a0bd6f021795f0d734b3426a34b0aaa3ae003515b275db`：0×P0 / 0×P1。发现三元组的 workdir 与 common storage 已分开；proposed `vcs.*` 仍未实现。本行是评审后的结案记录。 | **PASS** |
-| 2026-11-19 | LVC-02 | Libra `main` `3a22517` 增加 minor 1 的 `vcs.identity/status/diff/log/show`。插件 schema 追加这五个方法并更新 receipt。全量 clippy 仍被未改动的 `codex_capture_local_test` 递归上限拦住。 | locally-accepted |
-| 2026-11-19 | LVC-06 | Libra `main` `6651ccf` 增加 minor 2 的 `vcs.stage/unstage/commit`。过期 fence 在写入前拒绝。插件 schema 追加这三个方法。REL-01 未切，LVC-03 仍不得开工。 | locally-accepted |
+| 2026-11-19 | LVC-02 | Libra `main` `3a22517` 增加 minor 1 的 `vcs.identity/status/diff/log/show`。此前修改旧 receipt 的 fixture 摘要，但未证明新增条目来自旧 authority revision；撤销 locally-accepted，待修正 provenance 并完成实现评审。全量 clippy 仍被未改动的 `codex_capture_local_test` 递归上限拦住。 | 不通过，待修复 |
+| 2026-11-19 | LVC-06 | Libra `main` `6651ccf` 增加 minor 2 的 `vcs.stage/unstage/commit`。当时声称过期 fence 在写入前拒绝，后续检查发现该结论不成立（只哈希第一页且检查与写入非原子）；撤销 locally-accepted。REL-01 未切，LVC-03 仍不得开工。 | 不通过，待修复 |
