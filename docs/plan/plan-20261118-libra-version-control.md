@@ -12,7 +12,7 @@
 > | `deepseek-harness-libra-plugin` | branch `main`, `27da28137bb9450a3a6f2ec14954bfccc5ed5dbd` | clean at plan inspection. Implement only after refreshing source and package compatibility. |
 > | `libra` | branch `main`, `e8a21142fcba79d3ef30ece0ed43ca27cc1a5db6` | Inspection checkout contains unrelated unstaged changes in bridge, docs, and tests. Preserve them; before implementation establish a clean, reviewed task baseline and re-read its AGENTS/plan instructions. Facts below are checkout observations, not claims that those local edits are in the pinned commit. |
 >
-> DSH Desktop runtime is `0.2.2-rc.3`. The Libra plugin repo README identifies this source tree as unpublished `0.2.0`, while npm is `0.1.0`; do not describe source-tree capabilities as released package behavior. The compatibility receipt must be revalidated against the exact bridge executable and its `initialize.methods` response at implementation and release time.
+> DSH Desktop runtime at plan drafting was `0.2.2-rc.3`. LVC-01 re-read the running Desktop on 2026-11-19 and recorded `@deepseek-ai/dsh` `0.2.2-rc.5`; executable UI gates use that frozen version until a later card refreshes it. The Libra plugin repo README identifies this source tree as unpublished `0.2.0`, while npm is `0.1.0`; do not describe source-tree capabilities as released package behavior. The compatibility receipt must be revalidated against the exact bridge executable and its `initialize.methods` response at implementation and release time.
 >
 > **User product constraint:** A supported Harness workspace is a Libra repository with `.libra`; it does not contain `.git` alongside `.libra`. This plan does not build a Git adapter, Git/Libra selector, dual-repository mode, or import/migration flow. The panel reads Libra repository truth. It does not replace the separate DSH turn-change card.
 
@@ -111,6 +111,100 @@
 - **理由:** 现有 v1 allowlist fail-closed，当前 status/history 名称是 bridge history 语义；不能重解释旧方法而破坏已有客户端。
 - **后果:** 旧 peer 明确显示 unsupported；不得把空 response 当作空仓库。
 
+## LVC-01 冻结合同
+
+> 只读 spike，2026-11-19。不改产品代码。名称除下面标明「已安装合同」的 DSH/Libra 符号外，一律是 **proposed**，供 LVC-02 起实现，不得把 proposed 方法说成当前 allowlist 已有。Libra 事实只取 `main` `771e994cf85eaca43195f60f4640fc55898f5024` 的已提交树；工作区里未提交的 bridge/memory 改动不是本卡合同。
+
+### 已验证的 DSH 表面（已安装合同）
+
+运行时是 Desktop `app.asar` 里的 `@deepseek-ai/dsh` **`0.2.2-rc.5`**（成稿表里的 `0.2.2-rc.3` 是 2026-11-18 观察，不再是这次 spike 的运行时）。`@deepseek-ai/dsh-client-ui-sidebar-right`、`@deepseek-ai/dsh-working-directory`、`@deepseek-ai/dsh-web` 同为 `0.2.2-rc.5`。LVC-09 的 Desktop 门使用这里冻结的 `0.2.2-rc.5`，不再使用成稿时的 `0.2.2-rc.3`。
+
+| 表面 | 合同 | 证据 |
+|---|---|---|
+| 可信 cwd | Host `WorkingDirectoryService.get(session)` 只读 Session projection，不做文件系统 I/O，返回绝对路径；缺失记录时用 `defaultDirectory`。它不是仓库发现。 | `dsh-working-directory/src/index.ts` `get`（约 L141） |
+| cwd 失败 | `WORKING_DIRECTORY_INVALID` / `NOT_FOUND` / `UNAVAILABLE`。`ensure` 才做 `ctx.fs` 校验。 | 同文件 README 与 `ensure` |
+| Tab 类型 | `ctx.sidebarRightTabs.register({ id, kind, title, ... })`。`id` 全局唯一，建议包名；重复 `id` 抛错。page 类型不填 `patterns`，用 kind 打开。 | sidebar-right README「Extension seats」；`src/client/tab-registry.ts` |
+| Tab 正文 | `ctx.slots.register({ name: 'sidebar.right.pane.tab', key: definition.id }, Body)`。`key` 必须等于类型 `id`。正文用注入的 `useTabInfo()`，不是平行 owner props。 | `src/client/contract/slots.ts` `sidebar.right.pane.tab`；README 第 2 步 |
+| 刷新 | 不是 Host slash command。正文调用 `tab.actions.bindCommands({ refresh })`，卸载时释放。刷新不得重载应用。 | `slots.ts` `SidebarRightTabCommands.refresh`；README「The Tab domain」 |
+| 生命周期 | `tab.signal` 只在记录消失或插件卸载时 abort；收起侧栏或切换 Session 不 abort。`tab.visible` 区分前台。切换 Session 不得复用上一 Session 的行。 | `slots.ts` `SidebarRightTabInfo` |
+| 打开本面板 | `ctx.sidebarRight.openTab(kind)`。本面板是 page 类型，kind proposed：`libra-version-control`，id proposed：`@libra-tools/dsh-bundle/version-control`。 | README `openTab` |
+| Client→Host | 已安装模式是 `TypertRemoteService`：`super(ctx, '<namespace>')`，方法加 `@Remote`。Client 调 `ctx.remote.<namespace>.<method>()`，`ok === true` 时读 `value`，否则读 `error`。本插件 proposed namespace：`libraVcs`。slash command（`ctx.commands` / `ctx.remote.commands`）不是 VCS 写入口。 | `dsh-web/src/index.ts` `WebRuntime` 与 README `ctx.remote.web.listProviders`；`dsh-doc` `user-actions.md` |
+| 权威动作 | 批准、拒绝、放宽策略只由用户执行。Agent tool 不能调用批准。 | `user-actions.md` |
+
+`sidebar.right.pane.tab` 适用。不另找替代 surface。
+
+### 仓库绑定（proposed 规则，发现函数是已提交 Libra API）
+
+1. 每次操作读 `workingDirectory.get(session)`。模型参数不得提供 root、cwd 或 repository id。Host 不得 `set_current_dir`，也不得调用 `working_dir()` / `try_working_dir()`：二者走 `try_get_paths(None)`，读的是进程 cwd。
+2. 禁止用 `try_get_storage_path` 的父目录当工作树根。在 `771e994` 里该函数只返回三元组的第一项 common storage（`util.rs` `try_get_storage_path` 约 L1262；三元组定义在私有 `try_get_paths_full` 约 L692）。linked worktree 的 common storage 是主仓 `.libra`，它的父目录是主工作树，不是 Session cwd 所在的 linked worktree。
+3. 今天对显式路径公开的是 `try_get_worktree_gitdir(Some(cwd))`（local gitdir）和 `worktree_id_for_base(Some(cwd))`（linked id；`None` 表示主工作树）。没有公开函数对显式 cwd 返回 workdir。因此 LVC-02 必须新增 typed 方法，返回发现三元组的 **workdir**（第二项）以及 local gitdir 上的 `worktree_id`。在该方法落地前，LVC-03 不得用 storage 父路径或进程 cwd 绑定。
+4. cwd 落在仓库 metadata（`.libra` 目录自身）或发现返回 “cannot discover a worktree … across repository metadata” 时，结果是 `not_a_repository`。不得爬到主工作树。linked worktree 的 identity 是该 worktree 的 workdir，不是主工作树。
+5. 不探测 `.git`，不调用 `git`，不把 CLI 人类输出当协议。`libra rev-parse --show-toplevel` 不是 Host 绑定 API。
+6. repo identity proposed：`canonical realpath of the discovered workdir` 加上 `worktree_id`（缺省表示 main）。bridge、cache、outbox 按这个二元组隔离。
+7. 绑定之后再次发现的二元组不同：返回 `cwd_changed`，不迁移 outbox，不改写到新仓。用户明确重绑定后才换 identity。
+8. 无仓库、bridge 未握手、方法未协商，分别是 `not_a_repository`、`bridge_unavailable`、`unsupported_capability`。空列表只表示协商成功且确实没有条目。
+
+### Proposed bridge 方法
+
+当前已提交 allowlist 仍是 20 个方法（`protocol.rs` `METHOD_ALLOWLIST`，`HEAD` 上 `assert_eq!(len, 20)`）。其中 `status.get` 返回 `bridge_sessions` / `bridge_events` / `bridge_checkpoints`；`history.search` 搜索 bridge session。二者都不是 VCS。`diff.get` 的 mode 只有 `worktree` | `staged` | `checkpoint`，patch 上限 128 KiB。这些旧方法保持原语义。
+
+新方法 additive，未出现在 `initialize.methods` 里就 fail closed，不得伪装成空仓：
+
+| proposed 方法 | 作用 |
+|---|---|
+| `vcs.identity` | `{ worktree_root_hash, worktree_id, head_oid, branch, unborn }`。`worktree_id` 缺省表示 main。`worktree_root_hash` 是 discovered workdir 的稳定摘要，不把宿主机绝对路径交给模型。workdir 取发现三元组第二项，不取 common storage 的父目录。 |
+| `vcs.status` | 分页 status entry。 |
+| `vcs.diff` | 有界 diff。不复用 `diff.get` 的 checkpoint 语义来表示普通 HEAD diff。 |
+| `vcs.log` | commit 分页。 |
+| `vcs.show` | 一个 commit 的 detail。 |
+| `vcs.stage` / `vcs.unstage` / `vcs.commit` | 带 fence 的写。不复用 `commit.create`。 |
+
+### Proposed JSON 形状
+
+```json
+{
+  "repoIdentity": {
+    "id": "string, hash of canonical discovered workdir plus worktree_id, not an absolute path",
+    "worktreeId": "string | null; null means the main worktree",
+    "head": "oid | null",
+    "branch": "string | null",
+    "unborn": "boolean"
+  },
+  "statusEntry": {
+    "path": "repository-relative literal",
+    "state": "staged | unstaged | untracked | conflict | rename",
+    "oldPath": "string | null"
+  },
+  "cursor": { "next": "opaque string | null" },
+  "diff": {
+    "sides": "worktree-vs-index | index-vs-head | worktree-vs-oid",
+    "path": "repository-relative",
+    "patch": "utf8, may be empty",
+    "truncated": "boolean",
+    "truncation": "none | byte_cap | binary | page_cap",
+    "byteCap": 131072
+  },
+  "commitPage": { "commits": ["{ oid, summary, authorTime }"], "cursor": { "next": "string | null" } },
+  "commitDetail": { "oid": "string", "summary": "string", "parents": ["oid"], "files": ["statusEntry"] },
+  "writeFence": { "head": "oid | null", "indexGeneration": "string", "worktreeGeneration": "string" },
+  "operationResult": { "operationId": "string", "outcome": "applied | replayed | stale_state | approval_denied | partial", "commitOid": "oid | null", "paths": ["string"] },
+  "captureStatus": "pending | accepted | duplicate | rejected | conflict | gap | unknown"
+}
+```
+
+错误码 proposed，机器可判别，禁止用空 payload 表示：`not_a_repository`、`cwd_changed`、`unsupported_capability`、`bridge_unavailable`、`stale_state`、`approval_denied`、`truncated`（截断是 diff 字段，不是失败）、`invalid_params`。`approval_denied` 表示用户拒绝，bridge 零写入。
+
+写路径：repository-relative，拒绝绝对路径、`..`、NUL、`:` 开头的 pathspec。单次 path 数沿用现有上限 64，单路径 4096 字节。`operationId` 重复返回同一 `operationResult`，不第二写。
+
+### 能力矩阵
+
+| 面 | 身份 | VCS 面板 | Memory |
+|---|---|---|---|
+| 已发布 plugin npm `0.1.0` 与本树未发布的 `0.2.0` 源码 | 不是本计划的已交付面板 | 无 proposed `vcs.*` | 不依赖 |
+| Libra 已提交 `771e994` / Cargo `0.30.210` | 20 方法 allowlist；`status.get` 不是工作区 status | 只有现有 `diff.get` | allowlist 无 memory 方法；脏工作区里的 memory 文件不算 |
+| 本计划 REL-01 之后的 Libra | `initialize.methods` 含已协商的 proposed `vcs.*` | 面板可用 | 仍然 optional，不是 VCS 依赖 |
+| 旧 peer 握手成功但没有 `vcs.status` | 显示 `unsupported_capability` | 不显示空仓 | 不影响 |
+
 ## 实施顺序
 
 | 阶段 | 内容 | 退出条件 |
@@ -125,7 +219,7 @@
 
 | DEP-ID | 提供方 | 消费方 | 产物 | 状态 |
 |---|---|---|---|---|
-| DEP-01 | LVC-01 | LVC-02, LVC-03 | frozen DSH/Libra contracts and repository-binding rules | planned |
+| DEP-01 | LVC-01 | LVC-02, LVC-03 | frozen DSH/Libra contracts and repository-binding rules | frozen |
 | DEP-02 | LVC-02 | LVC-04, LVC-05, LVC-06 | negotiated typed read contract and generated fixture/TS types | planned |
 | DEP-03 | LVC-03 | LVC-04, LVC-05, LVC-07, LVC-08 | per-Session binding and per-repository bridge service | planned |
 | DEP-04 | LVC-04 | LVC-05 | Host read service and readonly tool contracts | planned |
@@ -142,7 +236,7 @@
 
 **Task type:** `spike`
 
-**Lifecycle / Acceptance:** `pending` / ` `
+**Lifecycle / Acceptance:** `done` / `complete`
 
 **Description:** 用运行时 Inspect 和已安装 DSH package source 验证 Session cwd、sidebar tab registration/props、Host remote operation / action entry points；对照 Libra command/core 确认 status/index/log/discovery 数据来源，冻结 read/write schemas 和错误状态。行为轴：接口合同。
 
@@ -152,23 +246,23 @@
 
 | 事实 | 证据 |
 |---|---|
-| keyed pane slot 存在但 slot type registration/props 仍需从正式 source 验证。 | Runtime Inspect `Slots.listSubTree(sidebar.right.pane.tab)` |
-| 当前 `status.get` 和 `history.search` 不是 VCS status/log。 | `libra/src/internal/ai/agent_bridge/methods.rs:155-197` |
-| 当前 install CLI 可从 working directory 查 Libra top-level。 | `/Users/eli/.libra/bin/libra rev-parse --help` |
+| `sidebar.right.pane.tab` 是 keyed、session scope，key 为 tab type `id`；刷新走 `bindCommands`。 | `@deepseek-ai/dsh-client-ui-sidebar-right` `0.2.2-rc.5` `src/client/contract/slots.ts` |
+| 当前已提交 `status.get` / `history.search` 不是 VCS status/log。 | Libra `771e994` `methods.rs` `status_get` / `history_search` |
+| `try_get_storage_path` 返回 common storage，不是 linked worktree 根。显式 workdir 要等 LVC-02 的 typed 方法。 | Libra `771e994` `src/utils/util.rs` `try_get_paths_full` |
 
 **Acceptance criteria:**
 
-- [ ] 记录正式的 DSH Client tab 注册与点击/刷新 operation 远程入口、props、生命周期，引用已安装 source 文件/版本；如 pane tab 不适用，给出已验证的兼容 surface。
-- [ ] 定义 `repo identity`, status entry, cursor, diff sides/truncation, commit page/detail, write fence, operation result, capture status 的 JSON schema 与错误语义；所有名称标为 proposed 或来源合同。
-- [ ] 确认每个 Session 从可信 cwd 绑定到一个 `.libra`；cwd 变化与 repo 不存在时 fail closed；不存在 Git 探测路径。
-- [ ] 输出明确的 version/capability matrix：published plugin/libra 与 development source 分开，Memory optional。
-- [ ] ER-06/ER-12：本卡只改计划文件/可能新增 ADR 文件须先登记；此卡无代码和运行时配置改动。
+- [x] 记录正式的 DSH Client tab 注册与点击/刷新 operation 远程入口、props、生命周期，引用已安装 source 文件/版本；如 pane tab 不适用，给出已验证的兼容 surface。
+- [x] 定义 `repo identity`, status entry, cursor, diff sides/truncation, commit page/detail, write fence, operation result, capture status 的 JSON schema 与错误语义；所有名称标为 proposed 或来源合同。
+- [x] 确认每个 Session 从可信 cwd 绑定到一个 `.libra`；cwd 变化与 repo 不存在时 fail closed；不存在 Git 探测路径。
+- [x] 输出明确的 version/capability matrix：published plugin/libra 与 development source 分开，Memory optional。
+- [x] ER-06/ER-12：本卡只改计划文件/可能新增 ADR 文件须先登记；此卡无代码和运行时配置改动。
 
 **Verification:**
 
-- [ ] Inspect queries `workingDirectory`, `Slots.listSubTree`, remote callable Host services；引用运行时 DSH `0.2.2-rc.3`。
-- [ ] Libra source/unit/read-only CLI 交叉核对，记录所用 commit 和相关测试名，不以 CLI 人类文本作为正式协议。
-- [ ] Codex review 此卡产物，所有 P0/P1 关闭。
+- [x] Inspect queries `workingDirectory`, `Slots.listSubTree`, remote callable Host services；引用运行时 DSH `0.2.2-rc.5`（LVC-01 冻结合同）。
+- [x] Libra source/unit/read-only CLI 交叉核对，记录所用 commit 和相关测试名，不以 CLI 人类文本作为正式协议。
+- [x] Codex review 此卡产物，所有 P0/P1 关闭。
 
 **Full-suite trigger:** `none`（只读合同 spike）
 
@@ -202,7 +296,7 @@
 
 **Split/dependency notes:** 后续实现不得在 contract 未冻结前并行开发。
 
-**修订历史:** 初稿。
+**修订历史:** 2026-11-19 冻结合同；Codex PASS on `46da7d71e7af16ee51a0bd6f021795f0d734b3426a34b0aaa3ae003515b275db`。
 
 ### Task LVC-02: Add typed Libra VCS read protocol
 
@@ -665,7 +759,7 @@
 - [ ] Final backend full suite from `/Volumes/Data/gitmono/libra-backend`: run `pnpm test`, then `pnpm test:api`, then `pnpm test:e2e`; all three must pass under this T-2 release card and ER-13.
 - [ ] From `/Volumes/Data/gitmono/deepseek-harness-libra-plugin`: `pnpm check`, then `env -u LIBRA_BINARY -u LIBRA_REPO pnpm test:contract -- --protocol-version 1`. That flag selects `tests/protocol` and all of `tests/bridge-client` (`scripts/test-contract.mjs`). `tests/bridge-client/libra-handshake.test.ts` is in that set and is skipped only when both `LIBRA_BINARY` and `LIBRA_REPO` are unset; if either is set, the test is not skipped and a valid pair launches the binary. The `env -u` form is the fixture-only run. For the REL-01 binary, first require `version_line="$("$LIBRA_BINARY" --version)"` to equal `libra $REL01_VERSION` and `shasum -a 256 "$LIBRA_BINARY"` to equal the SHA-256 recorded at REL-01. Then run `LIBRA_BINARY="$LIBRA_BINARY" LIBRA_REPO="$LIBRA_REPO" pnpm test:contract -- --libra-release "$REL01_VERSION"`. The runner only checks that the flag and both env vars are present, then runs `tests/bridge-client/libra-handshake.test.ts`, which asserts protocol major 1, source `deepseek-harness`, and that `methods` contains `event.append`. It does not compare the binary version to the flag. Do not describe the flag as a version proof. The `--events`, `--tools` and `--workspace` flags were removed and must not be used. VCS method presence is proved by the live-session method list below, not by this handshake.
 - [ ] From plugin repo root, set `DSH_CHECKOUT` to the DSH source checkout pinned to `cd5ef8148158c3a752a658978873241fdf8e2bbc`, verify `test "$(git -C "$DSH_CHECKOUT" rev-parse HEAD)" = cd5ef8148158c3a752a658978873241fdf8e2bbc`, then run `DSH_CHECKOUT="$DSH_CHECKOUT" pnpm test:lifecycle`. This is the existing pinned bundle lifecycle/artifact gate; it is not the target-version UI acceptance gate.
-- [ ] Target-version UI acceptance uses the released Libra binary, the REL-02 bundle artifact, DSH `0.2.2-rc.3`, and two synthetic Libra roots. Profiles: `dsh --profile desktop` is refused because the Desktop profile is managed exclusively by the Electron application, so the scripted gate runs in a dedicated CLI profile and the Desktop GUI check is performed in the Electron app with the same artifact settings. Prepare the fixtures and artifacts:
+- [ ] Target-version UI acceptance uses the released Libra binary, the REL-02 bundle artifact, the LVC-01 frozen Desktop (`@deepseek-ai/dsh` `0.2.2-rc.5`), and two synthetic Libra roots. Profiles: `dsh --profile desktop` is refused because the Desktop profile is managed exclusively by the Electron application, so the scripted gate runs in a dedicated CLI profile and the Desktop GUI check is performed in the Electron app with the same artifact settings. Prepare the fixtures and artifacts:
 
   ```bash
   set -euo pipefail
@@ -848,6 +942,8 @@ No test command is claimed as run by this design plan.
 |---|---|---|---|---|---|
 | 2026-11-18 | Plan baseline | `libra status --short --branch`; `libra log -1` in each repo | backend `a0782cf`; plugin `27da281`; Libra `e8a2114` | Recorded | Libra checkout has unrelated dirty files; preserve and revalidate. |
 | 2026-11-18 | Runtime contracts | Host/Client Inspect, installed CLI `--help`, package source reads | DSH `0.2.2-rc.3`; local Libra CLI `0.30.207` | Read-only design evidence | No repository data/database read. |
+| 2026-11-19 | LVC-01 | Read installed DSH package source and Libra `HEAD` allowlist. Did not use the dirty Libra worktree. | DSH `0.2.2-rc.5`; Libra `771e994` Cargo `0.30.210` | Recorded in 「LVC-01 冻结合同」 | No repository database read. |
+| 2026-11-19 | LVC-01 | Codex read-only review of the frozen contract | plan SHA-256 `46da7d71e7af16ee51a0bd6f021795f0d734b3426a34b0aaa3ae003515b275db` | PASS, 0×P0/0×P1 | Cross-check names only: `util.rs` `test_try_get_storage_path_*`; `protocol.rs` asserts `METHOD_ALLOWLIST.len() == 20`. Those tests were not executed. |
 
 ## 修订历史
 
@@ -865,3 +961,6 @@ No test command is claimed as run by this design plan.
 | 2026-11-19 | Codex R9 | FAIL：1×P1。LVC-07 要求候选包在该卡提交之后才打包，与模板 ER-01「先本地验收再提交」相反。改为在工作区验收通过后才允许 `libra commit`；打包后若跟踪文件再变，必须重跑该门。 | 修复后再审 |
 | 2026-11-19 | Codex R10 | PASS on `85301fd2053171f41ff79d7ff497dc21b2b47dfb33630fd6d1503d805e8d8d6c`：0×P0 / 0×P1。R9 的提交前打包已闭合。附带 1×P2：把候选证据写回本计划会触发「任意跟踪文件变化就重打包」。 | **PASS**（该哈希；P2 见下一行） |
 | 2026-11-19 | Codex R11 | PASS on `17bcdb3bb108a5bf2b18b1644a3b3624b724346b68cf55c5190cdbcfd4f5fe9d`：0×P0 / 0×P1。R10 的重打包 P2 已按 `scripts/stage-bundle-for-profile.mjs` 的复制输入收窄；写入本计划证据行本身不要求重打包。残留 P2（不阻塞）：`package.publish.json` 是读入后写成暂存 `package.json`，不是逐字节复制；`node_modules` 符号链接不在发布清单内。本行是评审后的结论记录。 | **PASS** |
+| 2026-11-19 | LVC-01 draft | 写入「LVC-01 冻结合同」：DSH `0.2.2-rc.5` 的 tab/Remote/cwd 合同、Libra `771e994` 的发现函数与 20 方法 allowlist、proposed `vcs.*` schema。尚未完成本卡 Codex。 | 待审 |
+| 2026-11-19 | LVC-01 Codex | FAIL：1×P1。`try_get_storage_path` 的父目录在 linked worktree 上会落到主工作树。改为禁止该绑定；workdir 必须来自发现三元组第二项，并由 LVC-02 的 typed 方法返回；metadata cwd fail closed。 | 修复后再审 |
+| 2026-11-19 | LVC-01 Codex R2 | PASS on `46da7d71e7af16ee51a0bd6f021795f0d734b3426a34b0aaa3ae003515b275db`：0×P0 / 0×P1。发现三元组的 workdir 与 common storage 已分开；proposed `vcs.*` 仍未实现。本行是评审后的结案记录。 | **PASS** |
