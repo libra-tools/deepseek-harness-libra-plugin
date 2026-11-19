@@ -93,13 +93,13 @@ used only by the Memory module; `context.get` retains its existing meaning.
 
 ## VCS read extension (LVC-02)
 
-Libra protocol minor 1 adds `vcs.identity`, `vcs.status`, `vcs.diff`, `vcs.log`,
-and `vcs.show`. They are negotiated from `initialize.methods`. `status.get`
-stays bridge session/event/checkpoint telemetry and is not worktree status.
-`vcs.identity.workdir` is a host binding path; model-facing tools must not
-forward it. A peer that does not advertise these names fails closed. This
-schema still lists the pre-existing `memory.*` rows; those are optional and
-are not part of the minor-1 Libra allowlist.
+The experimental `vcs.identity`, `vcs.status`, `vcs.diff`, `vcs.log`, and
+`vcs.show` implementation is under correction and has not passed review. Its
+presence in this historical fixture does not establish support by a particular
+Libra binary; inspect that binary's actual `initialize.methods` response.
+`status.get` remains bridge session/event/checkpoint telemetry, not worktree
+status. The fixture's historical receipt predates the VCS entries and does not
+establish their provenance; it must be corrected before release.
 
 ## VCS write extension (LVC-06)
 
