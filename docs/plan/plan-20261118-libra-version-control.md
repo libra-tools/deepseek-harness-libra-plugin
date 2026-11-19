@@ -960,7 +960,7 @@ Codex 对 Libra `771e994..6651ccf` 只读审查结论 **VERDICT: FAIL**，0 项�
 7. `vcs.show` 没有分页且根提交返回空文件列表，可能超出帧上限或误报；须支持根提交与有界分页。
 8. 握手只检查 major 并返回全局方法列表，未按连接协商 minor 并拒绝未协商方法。
 
-此前两次对用户所述“旧状态保证拒绝”和“locally-accepted”不成立；提交 `3a22517`、`6651ccf` 已推送 main，**不代表验收或发布成功**。Libra `7c5108f` 是临时缓解：从 `initialize` 和 NDJSON allowlist 移除全部八个实验性 `vcs.*` 方法，旧 `status.get` 保留；不代表缺陷已修复，也不影响已构建或已运行的旧二进制。`cff708e` 只关闭其中两项：字面路径拒绝 `* ? [ ]`，且 `vcs.commit` 在暂存集合与请求路径不一致时于创建提交前拒绝。方法仍不在 allowlist 中。fence 可见性、内容敏感 fence、检查与写入的原子性、提交后记录失败的幂等恢复、`vcs.show` 分页，以及按连接协商 minor，都还没有修复。Codex 对该缓解的第二轮评审 PASS；`agent_bridge_protocol_test` 8/8、`agent_bridge_stdio_test` 4/4、nightly fmt 和全量 all-target/all-feature Clippy 通过。为消除 Clippy 中未修改的 `codex_capture_local_test` 递归深度错误，同次在该测试 crate 加 `recursion_limit=256`；不得再声称全量 Clippy 持续失败。另须修复插件 fixture 的历史 authority receipt：仅改 fixture hash 不能证明新增方法来自旧 revision。先前四个 focused 测试及 targeted clippy 结果仅证明当时运行的有限范围，不替代这些安全与契约验证。
+此前两次对用户所述“旧状态保证拒绝”和“locally-accepted”不成立；提交 `3a22517`、`6651ccf` 已推送 main，**不代表验收或发布成功**。Libra `7c5108f` 是临时缓解：从 `initialize` 和 NDJSON allowlist 移除全部八个实验性 `vcs.*` 方法，旧 `status.get` 保留；不代表缺陷已修复，也不影响已构建或已运行的旧二进制。`cff708e` 关闭两项：字面路径拒绝 `* ? [ ]`，且 `vcs.commit` 在暂存集合与请求路径不一致时于创建提交前拒绝。`082b476` 让 fence 哈希每个变更路径的文件字节，超过 256 个路径则拒绝，并在本进程的一把门里于写入前重读 fence。这不是跨进程原子性。方法仍不在 allowlist 中。尚未修复：fence 不能通过协议读取、跨进程写入竞争、提交成功后记录失败时的重试、`vcs.show` 分页，以及按连接协商 minor。Codex 对该缓解的第二轮评审 PASS；`agent_bridge_protocol_test` 8/8、`agent_bridge_stdio_test` 4/4、nightly fmt 和全量 all-target/all-feature Clippy 通过。为消除 Clippy 中未修改的 `codex_capture_local_test` 递归深度错误，同次在该测试 crate 加 `recursion_limit=256`；不得再声称全量 Clippy 持续失败。另须修复插件 fixture 的历史 authority receipt：仅改 fixture hash 不能证明新增方法来自旧 revision。先前四个 focused 测试及 targeted clippy 结果仅证明当时运行的有限范围，不替代这些安全与契约验证。
 
 ## 修订历史
 
