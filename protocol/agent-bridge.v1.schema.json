@@ -35,7 +35,10 @@
     "vcs.status",
     "vcs.diff",
     "vcs.log",
-    "vcs.show"
+    "vcs.show",
+    "vcs.stage",
+    "vcs.unstage",
+    "vcs.commit"
   ],
   "limits": {
     "max_frame_bytes": 262144,

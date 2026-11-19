@@ -47,15 +47,18 @@ describe("protocol receiver", () => {
       return;
     }
     expect(receiver.contract.protocol_version).toEqual({ major: 1, minor: 2 });
-    expect(receiver.contract.methods).toHaveLength(27);
+    expect(receiver.contract.methods).toHaveLength(30);
     expect(receiver.contract.methods[8]).toBe("memory.recall");
     expect(receiver.contract.methods[9]).toBe("memory.episode.record");
-    expect(receiver.contract.methods.slice(-5)).toEqual([
+    expect(receiver.contract.methods.slice(-8)).toEqual([
       "vcs.identity",
       "vcs.status",
       "vcs.diff",
       "vcs.log",
       "vcs.show",
+      "vcs.stage",
+      "vcs.unstage",
+      "vcs.commit",
     ]);
     expect(receiver.contract.limits.max_frame_bytes).toBe(256 * 1024);
     expect(receiver.contract.source).toBe("deepseek-harness");

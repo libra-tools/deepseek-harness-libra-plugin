@@ -100,3 +100,12 @@ stays bridge session/event/checkpoint telemetry and is not worktree status.
 forward it. A peer that does not advertise these names fails closed. This
 schema still lists the pre-existing `memory.*` rows; those are optional and
 are not part of the minor-1 Libra allowlist.
+
+## VCS write extension (LVC-06)
+
+Minor 2 adds `vcs.stage`, `vcs.unstage`, and `vcs.commit`. They require
+`operation_id`, literal repository-relative `paths`, and `expectedHead`,
+`expectedIndex`, and `expectedWorktree`. A mismatch returns `stale_state`
+before any index or commit write. Replaying the same `operation_id` and
+payload returns the recorded outcome. `commit.create` is unchanged. These
+methods are not exposed in the Host UI or Agent tools until LVC-07.

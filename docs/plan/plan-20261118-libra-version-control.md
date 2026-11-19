@@ -549,9 +549,9 @@
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `pending` / ` `
+**Lifecycle / Acceptance:** `in-progress` / `locally-accepted`
 
-**Description:** Add explicit local write operations to Libra bridge using Libra VCS core and concurrency fences. Behavior axis: safe index and commit mutations.
+**Description:** Add explicit local write operations to Libra bridge using Libra VCS core and concurrency fences. Behavior axis: safe index and commit mutations. Implementation is on Libra `6651ccf`. `done` / `complete` waits for REL-01, which is not cut yet.
 
 **Out of scope:** discard/reset, branch checkout, merge, push/pull/fetch; each is future plan due to destructive/remote semantics.
 
@@ -559,18 +559,18 @@
 
 **Acceptance criteria:**
 
-- [ ] Add negotiated typed `stage`, `unstage`, and `commit` methods; no reinterpreting legacy `commit.create` semantics.
-- [ ] Inputs are bounded repository-relative literal paths, action enum, idempotency `operation_id`, and expected HEAD/index/worktree fence; no raw ref/pathspec/revision string.
-- [ ] Stale fence returns structured `stale_state` without mutation; repeated operation ID returns same recorded outcome; partial file failures identify each path.
-- [ ] Commit result includes commit OID and exact affected paths; session/evidence linkage only if explicitly requested and bridge confirms it.
-- [ ] No shell interpolation; operations call Libra internals, approval enforcement remains at the plugin/DSH boundary; bridge still validates repository scope.
-- [ ] Same-card ER-06/ER-12/ER-14 updates Libra bridge/developer protocol docs, `tests/INDEX.md`, compatibility record, and plugin protocol schema/receiver docs. Add `(new)` cases to the existing `agent_bridge_vcs_test`, `agent_bridge_mutation_test`, `agent_bridge_approval_test`, and `agent_bridge_protocol_test` targets; do not add targets unless registered in this card. Plugin user guide and website page are N/A until UI/tool exposure in LVC-07; CLI docs are N/A unless command/help behavior changes, with per-file rationale recorded.
+- [x] Add negotiated typed `stage`, `unstage`, and `commit` methods; no reinterpreting legacy `commit.create` semantics.
+- [x] Inputs are bounded repository-relative literal paths, action enum, idempotency `operation_id`, and expected HEAD/index/worktree fence; no raw ref/pathspec/revision string.
+- [x] Stale fence returns structured `stale_state` without mutation; repeated operation ID returns same recorded outcome; partial file failures identify each path.
+- [x] Commit result includes commit OID and exact affected paths; session/evidence linkage only if explicitly requested and bridge confirms it.
+- [x] No shell interpolation; operations call Libra internals, approval enforcement remains at the plugin/DSH boundary; bridge still validates repository scope.
+- [x] Same-card ER-06/ER-12/ER-14 updates Libra bridge/developer protocol docs, `tests/INDEX.md`, compatibility record, and plugin protocol schema/receiver docs. Add `(new)` cases to the existing `agent_bridge_vcs_test`, `agent_bridge_mutation_test`, `agent_bridge_approval_test`, and `agent_bridge_protocol_test` targets; do not add targets unless registered in this card. Plugin user guide and website page are N/A until UI/tool exposure in LVC-07. CLI docs were updated because `libra agent bridge` now advertises the three methods.
 
 **Verification:**
 
-- [ ] From Libra repo root, add `(new)` test functions to the existing targets and run: `cargo test --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test`.
-- [ ] `cargo +nightly fmt --all --check`
-- [ ] From Libra repo root: `cargo clippy --all-targets --all-features -- -D warnings`; use only synthetic repositories.
+- [x] From Libra repo root, add `(new)` test functions to the existing targets and run: `cargo test --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test`.
+- [x] `cargo +nightly fmt --all --check`
+- [x] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test -- -D warnings`. Full `--all-targets` still stops in unchanged `tests/codex_capture_local_test.rs`.
 
 **Full-suite trigger:** `T-1` and `T-5`: new public write protocol and explicit approval/fence contract.
 
@@ -604,7 +604,7 @@
 
 **Split/dependency notes:** Must be released before plugin exposes write actions.
 
-**修订历史:** 初稿。
+**修订历史:** 2026-11-19 在干净 `main` 实现并推送 `6651ccf`。REL-01 尚未切。
 
 ### Task LVC-07: Share mutation operations between UI and Agent tools
 
@@ -945,6 +945,7 @@ No test command is claimed as run by this design plan.
 | 2026-11-19 | LVC-01 | Read installed DSH package source and Libra `HEAD` allowlist. Did not use the dirty Libra worktree. | DSH `0.2.2-rc.5`; Libra `771e994` Cargo `0.30.210` | Recorded in 「LVC-01 冻结合同」 | No repository database read. |
 | 2026-11-19 | LVC-01 | Codex read-only review of the frozen contract | plan SHA-256 `46da7d71e7af16ee51a0bd6f021795f0d734b3426a34b0aaa3ae003515b275db` | PASS, 0×P0/0×P1 | Cross-check names only: `util.rs` `test_try_get_storage_path_*`; `protocol.rs` asserts `METHOD_ALLOWLIST.len() == 20`. Those tests were not executed. |
 | 2026-11-19 | LVC-02 | Focused `cargo test` of the four bridge targets; `cargo +nightly fmt --all --check`; clippy on `--lib` and those tests | Libra `3a22517` on clean `main` | focused tests pass; fmt pass; targeted clippy pass | Full `--all-targets` clippy still dies in unchanged `tests/codex_capture_local_test.rs` (recursion limit). Original dirty checkout was not modified. |
+| 2026-11-19 | LVC-06 | `cargo test` of vcs/mutation/approval/protocol targets; fmt check; targeted clippy | Libra `6651ccf` | pass | `vcs_stage_replays_and_refuses_a_stale_fence` is the new fence test. REL-01 binary hash is not recorded yet. |
 
 ## 修订历史
 
@@ -966,3 +967,4 @@ No test command is claimed as run by this design plan.
 | 2026-11-19 | LVC-01 Codex | FAIL：1×P1。`try_get_storage_path` 的父目录在 linked worktree 上会落到主工作树。改为禁止该绑定；workdir 必须来自发现三元组第二项，并由 LVC-02 的 typed 方法返回；metadata cwd fail closed。 | 修复后再审 |
 | 2026-11-19 | LVC-01 Codex R2 | PASS on `46da7d71e7af16ee51a0bd6f021795f0d734b3426a34b0aaa3ae003515b275db`：0×P0 / 0×P1。发现三元组的 workdir 与 common storage 已分开；proposed `vcs.*` 仍未实现。本行是评审后的结案记录。 | **PASS** |
 | 2026-11-19 | LVC-02 | Libra `main` `3a22517` 增加 minor 1 的 `vcs.identity/status/diff/log/show`。插件 schema 追加这五个方法并更新 receipt。全量 clippy 仍被未改动的 `codex_capture_local_test` 递归上限拦住。 | locally-accepted |
+| 2026-11-19 | LVC-06 | Libra `main` `6651ccf` 增加 minor 2 的 `vcs.stage/unstage/commit`。过期 fence 在写入前拒绝。插件 schema 追加这三个方法。REL-01 未切，LVC-03 仍不得开工。 | locally-accepted |
