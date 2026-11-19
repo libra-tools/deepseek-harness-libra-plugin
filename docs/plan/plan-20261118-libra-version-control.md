@@ -302,9 +302,9 @@
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `done` / `locally-accepted`
+**Lifecycle / Acceptance:** `in-progress` / `locally-accepted`
 
-**Description:** 在 Libra bridge 增加协商式、分页且有界的仓库 identity/status、diff 与 commit history/detail 查询，复用 Libra VCS 核心。行为轴：只读 VCS 状态合同。
+**Description:** 在 Libra bridge 增加协商式、分页且有界的仓库 identity/status、diff 与 commit history/detail 查询，复用 Libra VCS 核心。行为轴：只读 VCS 状态合同。实现已在 Libra `3a22517`。`done` / `complete` 仍要等 REL-01（LVC-06 之后的 bridge 发布）。
 
 **Out of scope:** plugin Host/Agent tool integration（LVC-04）及 Client panel（LVC-05）；所有写方法（LVC-06）；Git。
 
