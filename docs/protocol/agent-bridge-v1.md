@@ -90,3 +90,13 @@ methods. The plugin discovers the method through the `initialize.methods` list.
 The result contains an optional delivery with `prompt_section`, `receipt_id`,
 `view_hash`, `bundle_hash`, `selected_count`, and `token_budget`. This method is
 used only by the Memory module; `context.get` retains its existing meaning.
+
+## VCS read extension (LVC-02)
+
+Libra protocol minor 1 adds `vcs.identity`, `vcs.status`, `vcs.diff`, `vcs.log`,
+and `vcs.show`. They are negotiated from `initialize.methods`. `status.get`
+stays bridge session/event/checkpoint telemetry and is not worktree status.
+`vcs.identity.workdir` is a host binding path; model-facing tools must not
+forward it. A peer that does not advertise these names fails closed. This
+schema still lists the pre-existing `memory.*` rows; those are optional and
+are not part of the minor-1 Libra allowlist.

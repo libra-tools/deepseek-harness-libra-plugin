@@ -220,7 +220,7 @@
 | DEP-ID | 提供方 | 消费方 | 产物 | 状态 |
 |---|---|---|---|---|
 | DEP-01 | LVC-01 | LVC-02, LVC-03 | frozen DSH/Libra contracts and repository-binding rules | frozen |
-| DEP-02 | LVC-02 | LVC-04, LVC-05, LVC-06 | negotiated typed read contract and generated fixture/TS types | planned |
+| DEP-02 | LVC-02 | LVC-04, LVC-05, LVC-06 | negotiated typed read contract and generated fixture/TS types | landed on Libra `3a22517`; plugin schema lists the five methods |
 | DEP-03 | LVC-03 | LVC-04, LVC-05, LVC-07, LVC-08 | per-Session binding and per-repository bridge service | planned |
 | DEP-04 | LVC-04 | LVC-05 | Host read service and readonly tool contracts | planned |
 | DEP-05 | LVC-05 | LVC-07 | read-only panel shell and selected-session UI context | planned |
@@ -302,7 +302,7 @@
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `pending` / ` `
+**Lifecycle / Acceptance:** `done` / `locally-accepted`
 
 **Description:** 在 Libra bridge 增加协商式、分页且有界的仓库 identity/status、diff 与 commit history/detail 查询，复用 Libra VCS 核心。行为轴：只读 VCS 状态合同。
 
@@ -312,18 +312,18 @@
 
 **Acceptance criteria:**
 
-- [ ] 新增协议能力是 additive/minor-negotiated；旧 1.x peer 的既有行为不变，未知/未协商方法 fail closed。
-- [ ] Status 返回 repo identity、branch/HEAD/unborn 与分页状态项，区分 staged/unstaged/untracked/conflict/rename；无仓库与能力不足是结构化状态，不能伪装为空仓。
-- [ ] Log/detail 有 cursor pagination；diff 使用封闭 comparison enum 和 repo-relative path；binary/oversized/truncated 明示；响应 obey method/frame/page/byte limits。
-- [ ] 值全部来自 Libra 核心服务，禁止 SQL 直读、外部 `git` 进程、shell 文本解析或任意 revision/path。
-- [ ] 同步 Libra protocol fixture/schema、compatibility record、tests index 与相关 developer/command docs；注明 `status.get` 仍是 bridge telemetry。
-- [ ] ER-06/ER-12/ER-14：本卡同卡更新 Libra developer/protocol docs、plugin protocol schema 与 receiver contract；plugin README/site guide 为 N/A，理由是 Host/UI 尚未公开消费这些方法（由 LVC-04/05 在可用 slice 更新）；CLI command docs 为 N/A unless command/help behavior changes. 每项判定按仓记录。
+- [x] 新增协议能力是 additive/minor-negotiated；旧 1.x peer 的既有行为不变，未知/未协商方法 fail closed。
+- [x] Status 返回 repo identity、branch/HEAD/unborn 与分页状态项，区分 staged/unstaged/untracked/conflict/rename；无仓库与能力不足是结构化状态，不能伪装为空仓。
+- [x] Log/detail 有 cursor pagination；diff 使用封闭 comparison enum 和 repo-relative path；binary/oversized/truncated 明示；响应 obey method/frame/page/byte limits。
+- [x] 值全部来自 Libra 核心服务，禁止 SQL 直读、外部 `git` 进程、shell 文本解析或任意 revision/path。
+- [x] 同步 Libra protocol fixture/schema、compatibility record、tests index 与相关 developer/command docs；注明 `status.get` 仍是 bridge telemetry。
+- [x] ER-06/ER-12/ER-14：本卡同卡更新 Libra developer/protocol docs、plugin protocol schema 与 receiver contract；plugin README/site guide 为 N/A，理由是 Host/UI 尚未公开消费这些方法（由 LVC-04/05 在可用 slice 更新）；CLI command docs 已更新，因为 `libra agent bridge` 的方法清单变了。每项判定按仓记录。
 
 **Verification:**
 
-- [ ] From Libra repo root: `cargo test --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test` (new cases marked `(new)` in existing targets; do not add a new test target unless this card also registers it and updates `tests/INDEX.md`).
-- [ ] From Libra repo root: `cargo +nightly fmt --all --check`.
-- [ ] From Libra repo root: `cargo clippy --all-targets --all-features -- -D warnings`.
+- [x] From Libra repo root: `cargo test --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test` (new cases marked `(new)` in existing targets; do not add a new test target unless this card also registers it and updates `tests/INDEX.md`).
+- [x] From Libra repo root: `cargo +nightly fmt --all --check`.
+- [x] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test -- -D warnings`. Full `--all-targets` still stops in pre-existing `tests/codex_capture_local_test.rs` (`queries overflow the depth limit`); that file was not changed.
 
 **Full-suite trigger:** `T-1`: 跨 protocol、VCS、compatibility/schema surfaces 的公共 bridge 合同变更；最终全量门仍由收口阶段执行。
 
@@ -357,7 +357,7 @@
 
 **Split/dependency notes:** schema names are finalized by LVC-01; do not repurpose legacy `status.get`, `history.search`, or `diff.get` semantics.
 
-**修订历史:** 初稿。
+**修订历史:** 2026-11-19 在干净 `main` 副本实现并推送 `3a22517`。只读方法在 `vcs_read.rs`，不改写 dirty 工作区。
 
 ### Task LVC-03: Bind bridge runtime per Harness Session repository
 
@@ -944,6 +944,7 @@ No test command is claimed as run by this design plan.
 | 2026-11-18 | Runtime contracts | Host/Client Inspect, installed CLI `--help`, package source reads | DSH `0.2.2-rc.3`; local Libra CLI `0.30.207` | Read-only design evidence | No repository data/database read. |
 | 2026-11-19 | LVC-01 | Read installed DSH package source and Libra `HEAD` allowlist. Did not use the dirty Libra worktree. | DSH `0.2.2-rc.5`; Libra `771e994` Cargo `0.30.210` | Recorded in 「LVC-01 冻结合同」 | No repository database read. |
 | 2026-11-19 | LVC-01 | Codex read-only review of the frozen contract | plan SHA-256 `46da7d71e7af16ee51a0bd6f021795f0d734b3426a34b0aaa3ae003515b275db` | PASS, 0×P0/0×P1 | Cross-check names only: `util.rs` `test_try_get_storage_path_*`; `protocol.rs` asserts `METHOD_ALLOWLIST.len() == 20`. Those tests were not executed. |
+| 2026-11-19 | LVC-02 | Focused `cargo test` of the four bridge targets; `cargo +nightly fmt --all --check`; clippy on `--lib` and those tests | Libra `3a22517` on clean `main` | focused tests pass; fmt pass; targeted clippy pass | Full `--all-targets` clippy still dies in unchanged `tests/codex_capture_local_test.rs` (recursion limit). Original dirty checkout was not modified. |
 
 ## 修订历史
 
@@ -964,3 +965,4 @@ No test command is claimed as run by this design plan.
 | 2026-11-19 | LVC-01 draft | 写入「LVC-01 冻结合同」：DSH `0.2.2-rc.5` 的 tab/Remote/cwd 合同、Libra `771e994` 的发现函数与 20 方法 allowlist、proposed `vcs.*` schema。尚未完成本卡 Codex。 | 待审 |
 | 2026-11-19 | LVC-01 Codex | FAIL：1×P1。`try_get_storage_path` 的父目录在 linked worktree 上会落到主工作树。改为禁止该绑定；workdir 必须来自发现三元组第二项，并由 LVC-02 的 typed 方法返回；metadata cwd fail closed。 | 修复后再审 |
 | 2026-11-19 | LVC-01 Codex R2 | PASS on `46da7d71e7af16ee51a0bd6f021795f0d734b3426a34b0aaa3ae003515b275db`：0×P0 / 0×P1。发现三元组的 workdir 与 common storage 已分开；proposed `vcs.*` 仍未实现。本行是评审后的结案记录。 | **PASS** |
+| 2026-11-19 | LVC-02 | Libra `main` `3a22517` 增加 minor 1 的 `vcs.identity/status/diff/log/show`。插件 schema 追加这五个方法并更新 receipt。全量 clippy 仍被未改动的 `codex_capture_local_test` 递归上限拦住。 | locally-accepted |

@@ -30,7 +30,12 @@
     "review.run",
     "workspace.claim",
     "workspace.renew",
-    "workspace.release"
+    "workspace.release",
+    "vcs.identity",
+    "vcs.status",
+    "vcs.diff",
+    "vcs.log",
+    "vcs.show"
   ],
   "limits": {
     "max_frame_bytes": 262144,
