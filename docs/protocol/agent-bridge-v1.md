@@ -39,8 +39,10 @@ configuration normalization.
 
 ## Current entry and protocol authority
 
-The receiver fixture records Bridge `1.2` from Libra
-`a92b29e8fc9ad514ebe2e6c53216845aa059d94f`. The current bundle registers
+The receiver fixture and receipt claim Bridge `1.2` provenance from Libra
+`a92b29e8fc9ad514ebe2e6c53216845aa059d94f`. That upstream revision is not
+available in the current local Libra checkout, so this claim is not
+independently re-verified here. The current bundle registers
 Libra tools and uses the bridge for session lifecycle, context and workspace
 leases. It also projects DSH session events through a local outbox, using wire
 `event.append` and `session.flush`. Memory recall and opt-in Episode capture
@@ -95,11 +97,11 @@ used only by the Memory module; `context.get` retains its existing meaning.
 
 The experimental `vcs.identity`, `vcs.status`, `vcs.diff`, `vcs.log`, and
 `vcs.show` implementation is under correction and has not passed review. Its
-presence in this historical fixture does not establish support by a particular
+presence in past development builds does not establish support by a particular
 Libra binary; inspect that binary's actual `initialize.methods` response.
 `status.get` remains bridge session/event/checkpoint telemetry, not worktree
-status. The fixture's historical receipt predates the VCS entries and does not
-establish their provenance; it must be corrected before release.
+status. The historical fixture and receipt have been restored to their original
+bytes; new VCS methods require a newly verified authority fixture before release.
 
 ## VCS write extension (LVC-06)
 

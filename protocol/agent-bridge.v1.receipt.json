@@ -11,7 +11,7 @@
   },
   "fixture": {
     "path": "protocol/agent-bridge.v1.schema.json",
-    "sha256": "1b58b96b72f26ae676fe30955df7a21821899344666410e9524ba03ec535b26f"
+    "sha256": "f65daf162ad73ce994e246928d7caf7db042f48fb9dd9449e41f88ef502ce28a"
   },
   "checked_at": "2026-09-07"
 }
