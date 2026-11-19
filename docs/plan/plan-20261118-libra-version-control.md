@@ -116,10 +116,10 @@
 | 阶段 | 内容 | 退出条件 |
 |---|---|---|
 | Phase 0 — contract spike | 确认 DSH tab/remote operation contract、Libra root discovery 与数据来源，并冻结 schemas/能力矩阵。 | LVC-01 Codex PASS；接口无依赖 shell 文本/DB 直读；已验证多 Session cwd 入口。 |
-| Phase 1 — read-only VCS | LVC-02 and LVC-03 may run in parallel after LVC-01; then LVC-04 Host reads and LVC-05 read-only panel. | Two `.libra` workspaces are isolated; old bridge capabilities show unsupported; status/diff/log work. |
-| Phase 2 — safe local writes | LVC-06 Libra stage/unstage/commit follows LVC-02 on shared bridge files; LVC-07 adds shared Host/UI/tool actions. | stale state does not mutate; repeat operation is idempotent; Agent writes require approval. |
-| Phase 3 — capture context | LVC-08 shows outbox ack/reject/gap, checkpoints and confirmed commit linkage. | pending/rejected/gap/unknown are distinct; linkage is shown only when Libra confirms it. |
-| Phase 4 — release and site publish | Complete docs in each behavior card; release Libra then plugin, and deploy the accumulated website guide only after both. | Exact artifacts/handshake evidence pass; Cloudflare deploy and live routes are verified. |
+| Phase 1 — bridge protocol, then release | LVC-02 then LVC-06, strictly serial on the shared Libra and plugin schema files. Cut REL-01 and record its version plus binary SHA-256 before any later card. | No other cross-repo card runs during this phase; old peers fail closed; read and write methods are negotiated. |
+| Phase 2 — plugin reads | After REL-01: LVC-03, then LVC-04, then LVC-05. No two of these run at once. LVC-05 UI acceptance uses a pre-release candidate pack plus the REL-01 binary, not the future REL-02 tarball. | Two `.libra` workspaces are isolated; old bridge capabilities show unsupported; status/diff/log work. |
+| Phase 3 — plugin writes and capture | LVC-07, then LVC-08. LVC-07 UI acceptance uses a new candidate pack of that card's tree plus the same REL-01 binary. | stale state does not mutate; repeat operation is idempotent; Agent writes require approval; pending/rejected/gap/unknown stay distinct. |
+| Phase 4 — package and site publish | After LVC-08 is locally accepted, pack REL-02 with `node scripts/pack-bundle.mjs --destination …` from that commit, then LVC-09 publishes the website. | Published tarball `package/dist/index.js` matches the running Desktop bundle; Cloudflare deploy and live routes are verified. |
 
 ## 依赖登记表
 
@@ -134,6 +134,7 @@
 | DEP-07 | LVC-07 | LVC-08 | shared UI/Agent mutation service | planned |
 | DEP-08 | LVC-08 | LVC-09 | capture status projection and verified linkage contract | planned |
 | DEP-09 | Libra release point | plugin release point | released bridge artifact + exact handshake compatibility evidence | planned |
+| DEP-10 | LVC-06 | LVC-03, LVC-04, LVC-05, LVC-07 | G-07 serial edge after the shared schema/protocol files are frozen, plus the REL-01 binary SHA-256 recorded in this plan | planned |
 
 ## 任务卡
 
@@ -232,7 +233,7 @@
 
 **Full-suite trigger:** `T-1`: 跨 protocol、VCS、compatibility/schema surfaces 的公共 bridge 合同变更；最终全量门仍由收口阶段执行。
 
-**Dependencies:** `DEP-01`。可与 LVC-03 并行；LVC-06 必须等待本卡，因为两卡共享 Libra protocol/method/VCS 写集。
+**Dependencies:** `DEP-01`。不得与任何其它跨仓卡并发（G-07）。LVC-06 必须等待本卡，因为两卡共享 Libra protocol/method/VCS 文件以及 plugin `protocol/agent-bridge.v1.schema.json`、`docs/protocol/agent-bridge-v1.md`、`tests/protocol/receiver.test.ts`。LVC-03 在 LVC-06 和 REL-01 之后。
 
 **Deliverables:** Libra typed bridge read API、fixture/schema、focused tests、兼容记录与 docs。
 
@@ -295,7 +296,7 @@
 
 **Full-suite trigger:** `T-1`: Session lifecycle、bridge pool、outbox 与 repository isolation 跨切面；收口阶段跑全仓 gates。
 
-**Dependencies:** `DEP-01`。LVC-02 与本卡可在冻结合同后并行；本卡不消费 VCS read methods。
+**Dependencies:** `DEP-01`, `DEP-10`。本卡不消费 VCS read/write methods，但 G-07 禁止它与 LVC-02/LVC-06 并发；开工前 REL-01 的版本字符串和二进制 SHA-256 必须已经写进本计划执行证据。本卡不修改 LVC-02/LVC-06 的 schema 或 Libra 文件。
 
 **Deliverables:** session-scoped Host repository registry/pool，配置迁移说明和隔离测试。
 
@@ -355,11 +356,11 @@
 
 **Full-suite trigger:** `none` for isolated typed adapter; included in final integration full suite.
 
-**Dependencies:** `DEP-02`, `DEP-03`.
+**Dependencies:** `DEP-02`, `DEP-03`, `DEP-10`. This card consumes the schema frozen by LVC-02 and LVC-06. It must not edit `protocol/agent-bridge.v1.schema.json`, `docs/protocol/agent-bridge-v1.md`, or `tests/protocol/receiver.test.ts`.
 
 **Deliverables:** typed Host service and readonly tool schemas.
 
-**Implementation write set:** `deepseek-harness-libra-plugin: packages/bundle/src/index.ts; packages/bundle/src/vcs-read.ts (new); packages/tools/src/facade.ts; packages/tools/src/vcs-read.ts (new); packages/bridge-client/src/client.ts; packages/bridge-client/src/vcs-methods.ts (new); protocol/agent-bridge.v1.schema.json; tests/bridge-client/libra-vcs-read.test.ts (new); tests/tools/vcs-read-tools.test.ts (new); README.md; docs/tools.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (VCS read tools section; source only, do not deploy before REL-03)`.
+**Implementation write set:** `deepseek-harness-libra-plugin: packages/bundle/src/index.ts; packages/bundle/src/vcs-read.ts (new); packages/tools/src/facade.ts; packages/tools/src/vcs-read.ts (new); packages/bridge-client/src/client.ts; packages/bridge-client/src/vcs-methods.ts (new); tests/bridge-client/libra-vcs-read.test.ts (new); tests/tools/vcs-read-tools.test.ts (new); README.md; docs/tools.md; docs/compatibility.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (VCS read tools section; source only, do not deploy before REL-03)`. Protocol schema files are not in this write set; they stay with LVC-02 then LVC-06.
 
 **Release write set:** `Inherited from REL-02`。
 
@@ -379,7 +380,7 @@
 
 **Version increment:** plugin release per plugin package workflow.
 
-**Release boundary:** `independent, REL-02` (serialized with LVC-03/LVC-05/LVC-06).
+**Release boundary:** `independent, REL-02` (after LVC-03 and LVC-06; before LVC-05).
 
 **C/D coverage from:** `self`
 
@@ -404,31 +405,31 @@
 - [ ] Shows explicit `Libra` tab only for a bound `.libra` Session; status/error/unsupported/loading/empty are distinct.
 - [ ] Lists status groups and counts with file state, rename/conflict representation, pagination and refresh; selected file diff names its comparison sides.
 - [ ] History pagination and commit detail work for the same repository; changing active Session cannot flash or reuse prior Session data.
-- [ ] Uses DSH theme/i18n and installed Client slot contracts; English and zh-CN keys match; no hardcoded visible UI text.
+- [ ] Uses DSH theme/i18n and installed Client slot contracts. Visible panel strings are matching `en` and `zh` keys in the dictionaries at the top of `packages/bundle/client.js` (the existing `const en` / `const zh` objects). `packages/bundle/client/libra-tab.js` only calls `t(key)` and contains no user-visible string literals. `packages/bundle/locale/en.json` and `packages/bundle/locale/zh.json` are catalog copy, not this panel dictionary; do not edit them in this card. If LVC-01 shows the panel actually reads those JSON files, stop and add both paths here before editing them.
 - [ ] Keyboard navigation, loading/empty/error states, bounded diff rendering, and cancellation verified in browser.
 - [ ] A read-only diagnostics area in the panel shows, for the current Session's live bridge: resolved executable path, that file's SHA-256, child PID, negotiated protocol version, and the complete negotiated method list returned by that bridge's `initialize`, plus the loaded bundle's package directory and `dist/index.js` SHA-256. Values come from the Host record (LVC-03), never from a separately spawned probe or a config-file guess.
-- [ ] ER-06/ER-12 same-card plugin README/UI docs, compatibility range and website panel guide section are accurate; website deployment remains gated on REL-03.
+- [ ] ER-06/ER-12 same-card plugin README, `docs/ui.md`, `docs/compatibility.md`, and the website panel section are accurate; website deployment remains gated on REL-03.
 
 **Verification:**
 
 - [ ] From plugin repo root: `pnpm test -- tests/ui/libra-version-control-panel.test.ts` (new spec in existing Vitest target; new test cases marked `(new)`).
 - [ ] From plugin repo root: `pnpm check`.
 - [ ] From `/Volumes/Data/gitmono/libra-backend`: `pnpm typecheck && pnpm build` and `pnpm exec playwright test --config=tests/e2e/playwright.config.ts tests/e2e/specs/docs.spec.ts`.
-- [ ] Install the bundle in a disposable profile on the target DSH `0.2.2-rc.3` runtime with a released Libra binary, and configure that profile's `libraExecutable` to the exact released binary path (see LVC-09 for the profile/artifact procedure). Open two separate `.libra` workspaces and verify status, scoped diff, commit history, unsupported-capability and offline states in the Libra tab. Confirm no `.git` is present, switching Sessions never leaks repository rows/diffs, and record exact DSH/Libra artifact versions, binary SHA-256 and outcomes in this plan.
+- [ ] Pre-release candidate acceptance, not REL-02. REL-01 must already be recorded. From the plugin root run `pnpm build`, then `VCS_TEST_ROOT="$(mktemp -d)"` and `CANDIDATE="$(node scripts/pack-bundle.mjs --destination "$VCS_TEST_ROOT")"`. That script's success stdout is one archive path (`console.log` only). Do not capture `pnpm pack:bundle` stdout: pnpm writes a script banner on stdout before the path, so the captured value would not be a file. Fail unless `CANDIDATE` is an existing file. Install only that tarball with `dsh plugin --profile lvc-vcs add "$CANDIDATE"`. Set `libraExecutable` to the REL-01 binary whose `libra --version` line and SHA-256 match the REL-01 evidence in this plan. Do not install a previously published package or the later REL-02 tarball. Record this candidate's tarball SHA-256 and `tar -xOf "$CANDIDATE" package/dist/index.js | shasum -a 256`. That hash is evidence for this card only; LVC-08 may still change the bundle, so it is not required to equal the REL-02 hash. Open two separate `.libra` workspaces and verify status, scoped diff, commit history, unsupported-capability and offline states in the Libra tab. Confirm no `.git` is present, switching Sessions never leaks repository rows/diffs, and record DSH version, REL-01 version, both hashes and outcomes in this plan. The running-session diagnostics from LVC-03 must show that same binary path and SHA-256. LVC-09 later proves the published tarball.
 
 **Full-suite trigger:** `T-1`: new Client UI slot and Host read-service composition crosses plugin modules.
 
-**Dependencies:** `DEP-03`, `DEP-04`.
+**Dependencies:** `DEP-03`, `DEP-04`, `DEP-10`. UI acceptance uses the REL-01 binary plus a candidate pack of this card; it does not wait for or install REL-02.
 
 **Deliverables:** localized Libra VCS tab, settings-free repository status display and UI tests.
 
-**Implementation write set:** `deepseek-harness-libra-plugin: packages/bundle/client.js; packages/bundle/client/libra-tab.js (new; validate loader contract in LVC-01); packages/bundle/package.json (only if module export/files list changes); tests/ui/libra-version-control-panel.test.ts (new); README.md; docs/ui.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (read-only panel section; source only, no deploy before REL-03)`.
+**Implementation write set:** `deepseek-harness-libra-plugin: packages/bundle/client.js (includes the en/zh panel dictionaries); packages/bundle/client/libra-tab.js (new; validate loader contract in LVC-01; no user-visible string literals); packages/bundle/package.json (only if module export/files list changes); tests/ui/libra-version-control-panel.test.ts (new); README.md; docs/ui.md; docs/compatibility.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (read-only panel section; source only, no deploy before REL-03)`. `packages/bundle/locale/en.json` and `packages/bundle/locale/zh.json` are not in this write set.
 
 **Release write set:** `Inherited from REL-02`。
 
 **Files likely touched:** Client bundle, UI renderer, locales, slots declaration and UI tests.
 
-**Docs and compatibility impact:** Same-card updates: plugin README, `docs/ui.md`, compatibility range and backend guide's read-only panel section. Keep backend source change on `cf`; do not deploy it before REL-03.
+**Docs and compatibility impact:** Same-card updates: plugin README, `docs/ui.md`, `docs/compatibility.md`, and the backend guide's read-only panel section. Panel strings live in `packages/bundle/client.js`, not in `packages/bundle/locale/*.json`. Keep backend source change on `cf`; do not deploy it before REL-03.
 
 **Rollback mode:** `revert`
 
@@ -479,7 +480,7 @@
 
 **Full-suite trigger:** `T-1` and `T-5`: new public write protocol and explicit approval/fence contract.
 
-**Dependencies:** `DEP-01`, `DEP-02`。LVC-02 必须先于本卡，因为两卡共享 protocol/method/VCS 写集；LVC-03 可与 LVC-02 并行。
+**Dependencies:** `DEP-01`, `DEP-02`。LVC-02 必须先于本卡，因为两卡共享 Libra protocol/method/VCS 文件和 plugin schema/receiver 文件。本卡结束后立刻切 REL-01，把 `libra --version` 的整行输出和该二进制 SHA-256 写入本计划；在此之前 LVC-03 及之后的卡不得开工，也不得与本卡并发。
 
 **Deliverables:** bridge write methods, idempotency/fence handling, schema/fixture and focused tests.
 
@@ -537,21 +538,21 @@
 - [ ] From plugin repo root: `pnpm test -- tests/tools/vcs-write-tools.test.ts tests/ui/vcs-user-actions.test.ts` (new specs in existing Vitest target; new test cases marked `(new)`).
 - [ ] From plugin repo root: `pnpm check`.
 - [ ] From `/Volumes/Data/gitmono/libra-backend`: `pnpm typecheck && pnpm build` and `pnpm exec playwright test --config=tests/e2e/playwright.config.ts tests/e2e/specs/docs.spec.ts`.
-- [ ] In the target DSH `0.2.2-rc.3` profile that has `libraExecutable` set to the exact released binary (see LVC-09), with two disposable `.libra` roots, perform stage/unstage/commit from the UI; deny an Agent write and confirm no mutation; approve one write and confirm the resulting OID; change the index externally, retry with the old fence, and confirm `stale_state` plus refreshed UI. Check the same paths in `libra status`/`libra log`; record the binary SHA-256, DSH version, package version and outcomes in this plan.
+- [ ] Pre-release candidate acceptance, not REL-02, and not after commit. ER-01 requires this local check before review and before `libra commit`. From the working tree being verified, before any commit of this card, run `pnpm build`, then `VCS_TEST_ROOT="$(mktemp -d)"` and `CANDIDATE="$(node scripts/pack-bundle.mjs --destination "$VCS_TEST_ROOT")"`. If any pack input changes after that pack, discard the candidate and repeat this check before committing. Pack inputs are exactly the files copied by `scripts/stage-bundle-for-profile.mjs`: `packages/bundle/dist`, `packages/bundle/cordis.patch.yml`, `packages/bundle/package.publish.json`, `packages/bundle/client.js`, `packages/bundle/locale`, `packages/bundle/icon.svg`, `README.md`, and `LICENSE`. Writing this plan's evidence row is not one of those inputs and does not by itself require a repack. Capture the node script, not `pnpm pack:bundle`: pnpm adds a stdout banner, while the script prints only the archive path. Fail unless `CANDIDATE` is an existing file. Install only that tarball with `dsh plugin --profile lvc-vcs add "$CANDIDATE"`. `libraExecutable` stays the REL-01 binary already recorded (`libra --version` line and SHA-256). This candidate is not the REL-02 artifact; LVC-08 may change `dist/index.js` afterward, so do not require the two hashes to match. With two disposable `.libra` roots, perform stage/unstage/commit from the UI; deny an Agent write and confirm no mutation; approve one write and confirm the resulting OID; change the index externally, retry with the old fence, and confirm `stale_state` plus refreshed UI. Check the same paths with `"$LIBRA_BINARY" status` and `"$LIBRA_BINARY" log` inside each root. Record candidate tarball SHA-256, `tar -xOf "$CANDIDATE" package/dist/index.js | shasum -a 256`, REL-01 binary SHA-256, DSH version and outcomes in this plan. The session diagnostics must show that REL-01 binary, not a side process.
 
 **Full-suite trigger:** `T-1` shared UI/Agent operation and DSH approval path.
 
-**Dependencies:** `DEP-03`, `DEP-05`, `DEP-06`.
+**Dependencies:** `DEP-03`, `DEP-05`, `DEP-06`, `DEP-10`. Local acceptance uses a candidate pack plus the already recorded REL-01 binary. It must not install the REL-02 tarball, which cannot exist until this card and LVC-08 are in the release commit.
 
 **Deliverables:** Host mutation service, UI remote action, Agent tool schemas and parity tests.
 
-**Implementation write set:** `deepseek-harness-libra-plugin: packages/bundle/src/index.ts; packages/bundle/src/vcs-write.ts (new); packages/tools/src/facade.ts; packages/tools/src/vcs-write.ts (new); packages/bundle/client.js; packages/bundle/client/version-control-actions.js (new; tab/remote contract per LVC-01); tests/tools/vcs-write-tools.test.ts (new); tests/ui/vcs-user-actions.test.ts (new); tests/bundle/vcs-write-service.test.ts (new); README.md; docs/tools.md; docs/ui.md; docs/security.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (stage/commit and approval sections; source only, no deploy before REL-03)`.
+**Implementation write set:** `deepseek-harness-libra-plugin: packages/bundle/src/index.ts; packages/bundle/src/vcs-write.ts (new); packages/tools/src/facade.ts; packages/tools/src/vcs-write.ts (new); packages/bundle/client.js (add matching en/zh action keys to the existing dictionaries); packages/bundle/client/version-control-actions.js (new; tab/remote contract per LVC-01; no user-visible string literals); tests/tools/vcs-write-tools.test.ts (new); tests/ui/vcs-user-actions.test.ts (new); tests/bundle/vcs-write-service.test.ts (new); README.md; docs/tools.md; docs/ui.md; docs/security.md; docs/compatibility.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (stage/commit and approval sections; source only, no deploy before REL-03)`. Do not edit the protocol schema or Libra sources in this card.
 
 **Release write set:** `Inherited from REL-02`。
 
 **Files likely touched:** Host service, Agent tool facade, UI action adapter, locales and tests.
 
-**Docs and compatibility impact:** Same-card updates: plugin README, `docs/tools.md`, `docs/ui.md`, `docs/security.md`, compatibility record and the named website guide sections. Keep website source on `cf`; deploy only at REL-03.
+**Docs and compatibility impact:** Same-card updates: plugin README, `docs/tools.md`, `docs/ui.md`, `docs/security.md`, `docs/compatibility.md`, and the named website guide sections. Keep website source on `cf`; deploy only at REL-03.
 
 **Rollback mode:** `revert`
 
@@ -599,7 +600,7 @@
 - [ ] From plugin repo root: `pnpm test -- tests/session/session-projection.test.ts tests/bundle/tools-outbox.test.ts tests/ui/capture-status.test.ts` (new capture-status spec in existing Vitest target; new test cases marked `(new)`).
 - [ ] From plugin repo root: `pnpm check`.
 - [ ] From `/Volumes/Data/gitmono/libra-backend`: `pnpm typecheck && pnpm build` and `pnpm exec playwright test --config=tests/e2e/playwright.config.ts tests/e2e/specs/docs.spec.ts`.
-- [ ] From Libra repo root, add `(new)` cases to existing targets and run `cargo test --test agent_bridge_vcs_test --test agent_bridge_checkpoint_test --test agent_bridge_read_methods_test`; verify confirmed Session/commit relation on synthetic `.libra` repo.
+- [ ] Do not edit Libra sources or tests in this card. The new capture-status Vitest specs drive a synthetic bridge fixture: show linkage only when that fixture returns a concrete checkpoint id or commit OID, and do not show complete on flush/close alone. If the methods released in REL-01 cannot return that confirmed linkage, stop before any Libra edit and add a dependent Libra card with its own write set and REL membership. `tests/agent_bridge_checkpoint_test.rs` is existing read-only evidence, not a file this card modifies.
 
 **Full-suite trigger:** `T-1` across Session event, outbox, bridge durable records and Client projection.
 
@@ -607,7 +608,7 @@
 
 **Deliverables:** capture status query/projection, panel presentation and regression tests.
 
-**Implementation write set:** `deepseek-harness-libra-plugin: packages/session/src/outbox.ts; packages/session/src/projection.ts; packages/bundle/src/index.ts; packages/bundle/src/capture-status.ts (new); packages/bundle/client.js; packages/bundle/client/capture-status.js (new); tests/session/session-projection.test.ts; tests/bundle/tools-outbox.test.ts; tests/ui/capture-status.test.ts (new); README.md; docs/privacy.md; docs/compatibility.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (capture status and commit linkage sections; source only until REL-03)`. If a new Libra protocol method is needed, stop and register a dependent card before changing Libra.
+**Implementation write set:** `deepseek-harness-libra-plugin: packages/session/src/outbox.ts; packages/session/src/projection.ts; packages/bundle/src/index.ts; packages/bundle/src/capture-status.ts (new); packages/bundle/client.js; packages/bundle/client/capture-status.js (new); tests/session/session-projection.test.ts; tests/bundle/tools-outbox.test.ts; tests/ui/capture-status.test.ts (new); README.md; docs/privacy.md; docs/compatibility.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (capture status and commit linkage sections; source only until REL-03)`. Libra files, including `tests/agent_bridge_checkpoint_test.rs`, are not in this write set. If a new Libra protocol method is needed, stop and register a dependent card before changing Libra.
 
 **Release write set:** `Inherited from REL-02`。
 
@@ -662,7 +663,7 @@
 - [ ] From `/Volumes/Data/gitmono/libra-backend`: `python3 scripts/sync-libra-command-docs.py --libra-root ../libra --check`; review drift and do not hand-edit generated command pages.
 - [ ] From `/Volumes/Data/gitmono/libra-backend`: `pnpm exec playwright test --config=tests/e2e/playwright.config.ts tests/e2e/specs/docs.spec.ts`.
 - [ ] Final backend full suite from `/Volumes/Data/gitmono/libra-backend`: run `pnpm test`, then `pnpm test:api`, then `pnpm test:e2e`; all three must pass under this T-2 release card and ER-13.
-- [ ] From `/Volumes/Data/gitmono/deepseek-harness-libra-plugin`: `pnpm check`; `pnpm test:contract -- --protocol-version 1`; and, with `LIBRA_BINARY` and `LIBRA_REPO` pointing at the released binary and a disposable `.libra` repo, `pnpm test:contract -- --libra-release <released-libra-version>`. The `--events`, `--tools` and `--workspace` contract flags were removed from `scripts/test-contract.mjs` and must not be used.
+- [ ] From `/Volumes/Data/gitmono/deepseek-harness-libra-plugin`: `pnpm check`, then `env -u LIBRA_BINARY -u LIBRA_REPO pnpm test:contract -- --protocol-version 1`. That flag selects `tests/protocol` and all of `tests/bridge-client` (`scripts/test-contract.mjs`). `tests/bridge-client/libra-handshake.test.ts` is in that set and is skipped only when both `LIBRA_BINARY` and `LIBRA_REPO` are unset; if either is set, the test is not skipped and a valid pair launches the binary. The `env -u` form is the fixture-only run. For the REL-01 binary, first require `version_line="$("$LIBRA_BINARY" --version)"` to equal `libra $REL01_VERSION` and `shasum -a 256 "$LIBRA_BINARY"` to equal the SHA-256 recorded at REL-01. Then run `LIBRA_BINARY="$LIBRA_BINARY" LIBRA_REPO="$LIBRA_REPO" pnpm test:contract -- --libra-release "$REL01_VERSION"`. The runner only checks that the flag and both env vars are present, then runs `tests/bridge-client/libra-handshake.test.ts`, which asserts protocol major 1, source `deepseek-harness`, and that `methods` contains `event.append`. It does not compare the binary version to the flag. Do not describe the flag as a version proof. The `--events`, `--tools` and `--workspace` flags were removed and must not be used. VCS method presence is proved by the live-session method list below, not by this handshake.
 - [ ] From plugin repo root, set `DSH_CHECKOUT` to the DSH source checkout pinned to `cd5ef8148158c3a752a658978873241fdf8e2bbc`, verify `test "$(git -C "$DSH_CHECKOUT" rev-parse HEAD)" = cd5ef8148158c3a752a658978873241fdf8e2bbc`, then run `DSH_CHECKOUT="$DSH_CHECKOUT" pnpm test:lifecycle`. This is the existing pinned bundle lifecycle/artifact gate; it is not the target-version UI acceptance gate.
 - [ ] Target-version UI acceptance uses the released Libra binary, the REL-02 bundle artifact, DSH `0.2.2-rc.3`, and two synthetic Libra roots. Profiles: `dsh --profile desktop` is refused because the Desktop profile is managed exclusively by the Electron application, so the scripted gate runs in a dedicated CLI profile and the Desktop GUI check is performed in the Electron app with the same artifact settings. Prepare the fixtures and artifacts:
 
@@ -710,7 +711,7 @@
 
 **Deliverables:** updated docs, compatibility records and release/deployment evidence recorded here.
 
-**Implementation write set:** `libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md; apps/tanstack-app/content/docs/getting-started/index.en.md; apps/tanstack-app/content/docs/getting-started/meta.en.json; apps/tanstack-app/content/docs/index.en.mdx; plugin: README.md; docs/compatibility.md; docs/protocol/agent-bridge-v1.md; docs/tools.md; docs/ui.md; docs/privacy.md; Libra: COMPATIBILITY.md and docs/development/tracing/deepseek-harness.md only to record final released compatibility; docs/commands/agent.md and zh-CN twin only if CLI behavior/help changed.`
+**Implementation write set:** `libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md; apps/tanstack-app/content/docs/getting-started/index.en.md; apps/tanstack-app/content/docs/getting-started/meta.en.json; apps/tanstack-app/content/docs/index.en.mdx; plugin: README.md; docs/compatibility.md; docs/tools.md; docs/ui.md; docs/privacy.md; Libra: COMPATIBILITY.md and docs/development/tracing/deepseek-harness.md only to record final released version and handshake evidence, not to add methods. docs/commands/agent.md and zh-CN twin only if CLI behavior/help changed.` `protocol/agent-bridge.v1.schema.json`, `docs/protocol/agent-bridge-v1.md`, and `tests/protocol/receiver.test.ts` stay frozen after LVC-06; this card does not edit them. Released version text goes in README and `docs/compatibility.md`.
 
 **Release write set:** Website deploy `N/A` if docs are not yet public release; otherwise site deployment under `REL-03` after plugin artifact publication.
 
@@ -743,7 +744,7 @@
 | REL-ID | 成员卡 | 触发面 | 部署点 | 状态 |
 |---|---|---|---|---|
 | `REL-01` | LVC-02, LVC-06 | Libra bridge protocol / binary release | Libra repo release workflow, exact commit + tag/artifact according to Libra AGENTS and plan template | planned |
-| `REL-02` | LVC-03, LVC-04, LVC-05, LVC-07, LVC-08 | `@libra-tools/dsh-bundle` package | plugin repo package/release workflow; must consume REL-01 artifact | planned |
+| `REL-02` | LVC-03, LVC-04, LVC-05, LVC-07, LVC-08 | `@libra-tools/dsh-bundle` package | After LVC-08 is locally accepted, `node scripts/pack-bundle.mjs --destination <dir>` from that commit. Do not capture `pnpm pack:bundle` stdout. LVC-05 and LVC-07 must not use this tarball for their own acceptance; they use earlier candidate packs. Must consume the REL-01 binary. | planned |
 | `REL-03` | LVC-09 | DSH integration guide/navigation | website push to `cf`, `pnpm deploy:cf`; verify Cloudflare deployment history and live routes | planned |
 
 ## 任务卡粒度审计表
@@ -751,24 +752,24 @@
 | 任务卡 | 卡型 | 行为轴 | 生产文件数估算 | 写集 | 回滚模式 | 发布面 | 拆分来源 | 例外 |
 |---|---|---|---:|---|---|---|---|---|
 | LVC-01 | spike | Freeze API contracts | 0 | plan only | revert | N/A | none | none |
-| LVC-02 | implementation | Typed read bridge | ≤8 primary | libra | forward-only/revert pre-release | REL-01 | none | none |
-| LVC-03 | implementation | Session repo binding | ≤8 primary | plugin | revert | REL-02 | none | none |
-| LVC-04 | implementation | Host read API | ≤8 primary | plugin | revert | REL-02 | LVC-03 | none |
-| LVC-05 | implementation | Read-only Client panel | ≤8 primary | plugin | revert | REL-02 | LVC-04 | none |
-| LVC-06 | implementation | Typed bridge mutations | ≤8 primary | libra | forward-only/revert pre-release | REL-01 | none | none |
-| LVC-07 | implementation | Shared UI/tool mutations | ≤8 primary | plugin | revert | REL-02 | LVC-06 | none |
-| LVC-08 | implementation | Capture status projection | ≤8 primary per repo | plugin (+ Libra only if new contract card) | revert | REL-02 | LVC-03/07 | none |
+| LVC-02 | implementation | Typed read bridge | 4 primary | libra bridge sources + plugin schema/receiver | forward-only/revert pre-release | REL-01 | none | none |
+| LVC-03 | implementation | Session repo binding | 5 primary | plugin runtime + ER-06 docs/backend guide | revert | REL-02 | none | none |
+| LVC-04 | implementation | Host read API | 6 primary | plugin runtime + ER-06 docs/backend guide; schema frozen | revert | REL-02 | LVC-03 | none |
+| LVC-05 | implementation | Read-only Client panel | 3 primary | plugin client + ER-06 docs/backend guide | revert | REL-02 | LVC-04 | none |
+| LVC-06 | implementation | Typed bridge mutations | 4 primary | libra bridge sources + plugin schema/receiver | forward-only/revert pre-release | REL-01 | none | none |
+| LVC-07 | implementation | Shared UI/tool mutations | 6 primary | plugin runtime + ER-06 docs/backend guide | revert | REL-02 | LVC-06 | none |
+| LVC-08 | implementation | Capture status projection | 6 primary | plugin only; Libra edit requires a new card | revert | REL-02 | LVC-03/07 | none |
 | LVC-09 | docs | Published docs | ≤20 | all three by explicit list | revert | REL-03 | all feature cards | none |
 
-**粒度核对:** Implementation 卡的“≤8 primary”是估计，不是允许超额的批准；执行前按最终文件数确认。跨仓切分必须先冻结接口，所有共享目录写入串行化。若任何卡超过 G-03，必须在实现前拆卡并更新本表/依赖，不得事后解释。
+**粒度核对:** 「primary」只计非测试、非 ER-06 文档的实现文件，且上表数字按当前写集逐项数过，不是允许超额的批准。测试与同卡 README/`docs/*`/网站指南是随附同步集，不计入 G-03 生产文件数。若实现时 primary 超过 8，必须先拆卡并更新本表与依赖。跨仓卡不得并发；共享文件按下一节全序写入。
 
 ## 并发声明
 
-- LVC-01 必须先完成；其他卡不得与其并行。
-- LVC-02 与 LVC-03 在 LVC-01 冻结合同后可并行；LVC-06 与 LVC-02 共写 Libra protocol/method/VCS 文件，必须等 LVC-02 完成后串行执行。
-- LVC-04 等待 LVC-02 + LVC-03；LVC-05 等待 LVC-04 与 LVC-03。
-- LVC-06 等待 LVC-02；LVC-07 等待 LVC-05（UI shell）、LVC-06（写协议）和 LVC-03（repo binding）。
-- LVC-08 等待 LVC-07；不得与 LVC-03/LVC-07 并行修改 `packages/session/src/outbox.ts`。
+- G-07：每张跨仓卡都不得与另一张跨仓卡并发。全序是 LVC-01 → LVC-02 → LVC-06 → 切 REL-01 并记录 `libra --version` 整行与二进制 SHA-256 → LVC-03 → LVC-04 → LVC-05 → LVC-07 → LVC-08 → `node scripts/pack-bundle.mjs --destination …` 切 REL-02 → LVC-09 → REL-03。不要用 `pnpm pack:bundle` 的 stdout 充当路径：pnpm 会在路径前打印 banner。
+- 共享 schema 写集只有 LVC-02 然后 LVC-06：`src/internal/ai/agent_bridge/protocol.rs`、`methods.rs`、`vcs.rs`，以及 plugin `protocol/agent-bridge.v1.schema.json`、`docs/protocol/agent-bridge-v1.md`、`tests/protocol/receiver.test.ts`。之后的卡不得再改这些文件。
+- `packages/bundle/src/index.ts` 的顺序是 LVC-03 → LVC-04 → LVC-07 → LVC-08。`packages/bridge-client/src/client.ts` 是 LVC-03 → LVC-04。`packages/tools/src/facade.ts` 是 LVC-04 → LVC-07。`packages/bundle/client.js` 是 LVC-05 → LVC-07 → LVC-08。`packages/session/src/outbox.ts` 是 LVC-03 → LVC-08。`README.md`、`docs/compatibility.md` 和 `apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md` 是 LVC-03 → LVC-04 → LVC-05 → LVC-07 → LVC-08 → LVC-09。Libra `COMPATIBILITY.md` 与 `docs/development/tracing/deepseek-harness.md` 只由 LVC-02 → LVC-06 → LVC-09 依次写入；LVC-09 只补已发布版本与握手证据，不新增方法。
+- LVC-05 与 LVC-07 的 UI 验收使用当时 `node scripts/pack-bundle.mjs` 打出的候选 tarball 加上已记录的 REL-01 二进制。候选包的 `dist/index.js` 哈希不必等于最终 REL-02。只有 LVC-09 把运行中的 Desktop bundle 与 REL-02 tarball 内 `package/dist/index.js` 对比。
+- LVC-08 不修改 Libra。若现有 bridge 方法无法表达已确认关联，先停并另立 Libra 卡，不得在本卡写集外改测试。
 - LVC-09 等待 LVC-08 与 REL-01/02 的实际发布产物；每个用户可见 slice 的文档源修改随其行为卡交付，网站 deployment 统一延迟到 REL-03。
 - 不同仓的每一张跨仓卡先提交/推送行为实现仓，再提交/推送同卡文档源仓；只在 REL-03 部署网站。每一步记录相邻仓 SHA；发布序列严格 REL-01 → REL-02 → REL-03。
 - In each individual checkout, follow its own branch/working-tree/commit rules; do not reset or overwrite unrelated files. Current Libra source checkout has unrelated uncommitted work and is not an implementation sandbox until separately cleared/isolated under its AGENTS policy.
@@ -809,11 +810,12 @@
 | Libra format/lint (cwd: `/Volumes/Data/gitmono/libra`) | `cargo +nightly fmt --all --check`; `cargo clippy --all-targets --all-features -- -D warnings` | formatting and lint gates |
 | Plugin focused | `pnpm test -- tests/bundle/repository-binding.test.ts tests/bridge-client/repository-pool.test.ts tests/bridge-client/libra-vcs-read.test.ts tests/tools/vcs-read-tools.test.ts tests/ui/libra-version-control-panel.test.ts tests/tools/vcs-write-tools.test.ts tests/ui/vcs-user-actions.test.ts tests/session/session-projection.test.ts tests/bundle/tools-outbox.test.ts tests/ui/capture-status.test.ts` (cwd: plugin root) | bridge client, session binding, tools, UI |
 | Plugin full | `pnpm check` (cwd: plugin root) | lint, typecheck, all unit tests, build |
-| Plugin contracts | `pnpm test:contract -- --protocol-version 1`; with `LIBRA_BINARY`/`LIBRA_REPO` set, `pnpm test:contract -- --libra-release <released-libra-version>` (cwd: plugin root) | fixture validation against the protocol fixture and a real released binary; the removed `--events`/`--tools`/`--workspace` flags must not be passed |
+| Plugin contracts | `env -u LIBRA_BINARY -u LIBRA_REPO pnpm test:contract -- --protocol-version 1` (cwd: plugin root). Separately, `"$LIBRA_BINARY" --version` must equal `libra $REL01_VERSION` and `shasum -a 256 "$LIBRA_BINARY"` must equal the REL-01 record, then `LIBRA_BINARY`/`LIBRA_REPO` `pnpm test:contract -- --libra-release "$REL01_VERSION"` | `--protocol-version 1` selects `tests/protocol` and all of `tests/bridge-client`. The handshake test launches a binary when either env var is set, so fixture-only execution must unset both. `--libra-release` only requires the flag plus both env vars and then runs `tests/bridge-client/libra-handshake.test.ts` (protocol major, source, `event.append`). Version and SHA-256 checks stay outside that runner. Do not pass removed `--events`/`--tools`/`--workspace` flags |
 | Website docs | `pnpm typecheck && pnpm build` (cwd: backend root) | doc manifest, i18n, Workers build |
 | Website full closeout | `pnpm test`; `pnpm test:api`; `pnpm test:e2e` (each cwd: backend root) | required by ER-13/T-2: unit, API and browser suites |
 | Website focused docs browser | `pnpm exec playwright test --config=tests/e2e/playwright.config.ts tests/e2e/specs/docs.spec.ts` (cwd: backend root) | guide routes and links |
-| Browser VCS acceptance | LVC-09 procedure: isolated `.libra` fixture script, `dsh --profile lvc-vcs --patch … --dump-config` composition check, tarball/binary SHA-256, Desktop install of the exact tarball, `tar -xOf … package/dist/index.js \| shasum -a 256` compared with the running Host's loaded-bundle hash, and live-session diagnostics (resolved executable path + hash, PID/`ps` line, protocol version, complete `initialize` method list) | status/diff/history/write actions, approvals, stale fence, cross-Session isolation, and proof that each running session loaded the tested bundle and launched the tested binary |
+| Pre-release candidate pack | After `pnpm build` at plugin root: `CANDIDATE="$(node scripts/pack-bundle.mjs --destination "$VCS_TEST_ROOT")"`, then `dsh plugin --profile lvc-vcs add "$CANDIDATE"`. Do not capture `pnpm pack:bundle` stdout. `libraExecutable` is the REL-01 binary | LVC-05, LVC-07, and the REL-02 pack. The node script prints one archive path; pnpm's banner would make command substitution fail the file check. Record tarball SHA-256 and `tar -xOf "$CANDIDATE" package/dist/index.js \| shasum -a 256`. LVC-05/07 hashes need not equal the later REL-02 tarball |
+| Browser VCS acceptance | LVC-09 procedure after REL-02 exists: isolated `.libra` fixture script, `dsh --profile lvc-vcs --patch … --dump-config` composition check, published-tarball/binary SHA-256, Desktop install of that exact REL-02 tarball, `tar -xOf … package/dist/index.js \| shasum -a 256` compared with the running Host's loaded-bundle hash, and live-session diagnostics (resolved executable path + hash, PID/`ps` line, protocol version, complete `initialize` method list) | status/diff/history/write actions, approvals, stale fence, cross-Session isolation, and proof that the running session loaded the published bundle and launched the REL-01 binary |
 | Existing plugin lifecycle artifact gate | Set `DSH_CHECKOUT` to the pinned `cd5ef8148158c3a752a658978873241fdf8e2bbc`, then run `DSH_CHECKOUT="$DSH_CHECKOUT" pnpm test:lifecycle` (cwd: plugin root) | published declaration and bundle lifecycle smoke only; does not replace target-version UI acceptance |
 | Website preview/deploy | `pnpm preview:cf`; after REL-01/02, `pnpm deploy:cf` (cwd: backend root) | docs links and public deployment |
 | Libra full-suite closeout | `source .env.test && source .env.live-test && cargo nextest run --all --no-fail-fast --retries 2` (cwd: Libra root), plus `cargo +nightly fmt --all --check` and `cargo clippy --all-targets --all-features -- -D warnings` | all Rust regression gates per Libra plan template v2.16; recheck commands against current Libra instructions before execution |
@@ -858,3 +860,8 @@ No test command is claimed as run by this design plan.
 | 2026-11-18 | Codex R4 | FAIL：P1 Desktop 工件身份未证明（未从 REL-02 tarball 安装/未绑定已加载包）；P1 握手来自旁路进程而非被测会话，且 `head -c` 截断。改为：LVC-03 记录每个 bridge 的 resolved 路径/SHA-256/PID/完整 `initialize` 并只读暴露；LVC-05 面板诊断区展示该会话证据；LVC-09 从运行中会话取完整方法列表并校验无 JSON-RPC error、Desktop 从同一 tarball 安装并记录 `dist/index.js` hash。 | 修复后再审 |
 | 2026-11-18 | Codex R5 | FAIL：P1 仅记录安装目录 hash，未与 tarball 内 `dist/index.js` 对比，也未证明该路径就是 Desktop 实际加载的 bundle。补充：LVC-03 由运行进程记录已加载 bundle 包目录与 `dist/index.js` SHA-256；LVC-05 诊断区展示；LVC-09 计算 `tar -xOf "$PLUGIN_TARBALL" package/dist/index.js` 的 SHA-256 并与运行侧比对，不一致/无法取得即失败。 | 修复后再审 |
 | 2026-11-18 | Codex R6 | PASS：R5 的 P1 已闭合，未发现新的 P0/P1 或实质性事实/模板问题；`.libra`-only 约束、依赖 DAG、同卡文档门、跨仓发布顺序、测试命令与工件身份链均通过复审。 | **PASS** |
+| 2026-11-19 | Codex R7 | FAIL：5×P1。LVC-07 用 REL-02 tarball 验收造成发布环；LVC-08 要求改未登记的 Libra 测试；LVC-02/LVC-03 跨仓并行违反 G-07，且 LVC-04 与 LVC-06 共写 schema；`--libra-release` 被写成版本证明但 runner 只跑握手；LVC-05 要改 compatibility 与中英文字符串但写集未点名文件。改为全序 LVC-01→02→06→REL-01→03→04→05→07→08→REL-02→09；LVC-05/07 用候选包加已记录的 REL-01 二进制；LVC-08 只测插件 fixture；契约门把 `libra --version` 与 SHA-256 放在 runner 之外；面板文案落在 `client.js` 的 en/zh，并登记 `docs/compatibility.md`。 | 修复后再审 |
+| 2026-11-19 | Codex R8 | FAIL：2×P1。`CANDIDATE="$(pnpm pack:bundle …)"` 会吃进 pnpm 的 stdout banner，路径检查必然失败；`--protocol-version 1` 会跑整个 `tests/bridge-client`，环境里已有 `LIBRA_BINARY` 或 `LIBRA_REPO` 时握手测试会启动二进制。改为 `node scripts/pack-bundle.mjs --destination` 取唯一路径，并用 `env -u LIBRA_BINARY -u LIBRA_REPO` 跑 fixture-only 契约门。 | 修复后再审 |
+| 2026-11-19 | Codex R9 | FAIL：1×P1。LVC-07 要求候选包在该卡提交之后才打包，与模板 ER-01「先本地验收再提交」相反。改为在工作区验收通过后才允许 `libra commit`；打包后若跟踪文件再变，必须重跑该门。 | 修复后再审 |
+| 2026-11-19 | Codex R10 | PASS on `85301fd2053171f41ff79d7ff497dc21b2b47dfb33630fd6d1503d805e8d8d6c`：0×P0 / 0×P1。R9 的提交前打包已闭合。附带 1×P2：把候选证据写回本计划会触发「任意跟踪文件变化就重打包」。 | **PASS**（该哈希；P2 见下一行） |
+| 2026-11-19 | Codex R11 | PASS on `17bcdb3bb108a5bf2b18b1644a3b3624b724346b68cf55c5190cdbcfd4f5fe9d`：0×P0 / 0×P1。R10 的重打包 P2 已按 `scripts/stage-bundle-for-profile.mjs` 的复制输入收窄；写入本计划证据行本身不要求重打包。残留 P2（不阻塞）：`package.publish.json` 是读入后写成暂存 `package.json`，不是逐字节复制；`node_modules` 符号链接不在发布清单内。本行是评审后的结论记录。 | **PASS** |
