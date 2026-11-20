@@ -40,13 +40,16 @@ configuration normalization.
 ## Current entry and protocol authority
 
 The receiver fixture and receipt claim Bridge `1.2` provenance from Libra
-`a92b29e8fc9ad514ebe2e6c53216845aa059d94f`. That upstream revision is not
-available in the current local Libra checkout, so this claim is not
-independently re-verified here. The current bundle registers
-Libra tools and uses the bridge for session lifecycle, context and workspace
-leases. It also projects DSH session events through a local outbox, using wire
-`event.append` and `session.flush`. Memory recall and opt-in Episode capture
-are mounted only when the negotiated peer advertises the required methods.
+`ff895071882e05c4bdfe4a227976bc3ad77ac0d4` (`libra 0.30.217`), the revision
+that enabled the typed repository reads. The receipt pins the SHA-256 of that
+revision's `src/internal/ai/agent_bridge/protocol.rs` and of this fixture, so
+a changed contract is detected rather than trusted. The current bundle
+registers Libra tools and uses the bridge for session lifecycle, context and
+workspace leases. It also projects DSH session events through a local outbox,
+using wire `event.append` and `session.flush`. Memory recall and opt-in
+Episode capture are mounted only when the negotiated peer advertises the
+required methods; the current authority revision does not advertise them, so
+the fixture no longer lists them either.
 
 DSH's `session/flush` hook is a separate, parallel durability checkpoint: the
 plugin waits for pending capture and outbox work through that native hook.
@@ -95,14 +98,23 @@ used only by the Memory module; `context.get` retains its existing meaning.
 
 ## VCS read extension (LVC-02)
 
-The experimental `vcs.identity`, `vcs.status`, `vcs.diff`, `vcs.log`, and
-`vcs.show` implementation is under correction and has not passed review. Its
-presence in past development builds does not establish support by a particular
-Libra binary; inspect that binary's actual `initialize.methods` response.
-`status.get` remains bridge session/event/checkpoint telemetry, not worktree
-status. The historical fixture and receipt have been restored to their original
-bytes; new VCS methods require a newly verified authority fixture before release.
+`vcs.identity`, `vcs.status`, `vcs.diff`, `vcs.log`, and `vcs.show` are
+additive protocol minor 1 methods. They are negotiated per connection: a peer
+that negotiated minor 1 or higher sees them in `initialize.methods` and may
+call them, and a peer that negotiated an older minor neither sees nor may
+call them — the bridge refuses such a call before dispatch, and the existing
+behaviour of the original v1 methods is unchanged.
+
+The reads are bounded and repository-scoped. `vcs.identity` returns stable
+repository identity and HEAD fields without an absolute path; `vcs.status`
+returns paginated staged, unstaged, untracked, conflict and rename states;
+`vcs.diff` uses validated repository-relative paths and reports truncation;
+`vcs.log` and `vcs.show` return paginated history and commit detail. Values
+come from Libra core services, never direct SQL, shell text parsing or an
+external `git` process, and errors that could carry host paths withhold the
+underlying detail. `status.get` remains bridge session/event/checkpoint
+telemetry, not worktree status.
 
 ## VCS write extension (LVC-06)
 
-**Do not use the experimental `vcs.stage`, `vcs.unstage`, and `vcs.commit` methods.** Codex implementation review found that their fence does not reliably detect changed content or concurrent writes, paths can expand as pathspecs, and commit can include unselected staged files. Replay after an interrupted commit is also unsafe. The LVC-02/LVC-06 implementation is under correction; an advertised method does not establish that it is safe or released. `commit.create` retains its existing contract. See the LVC-02 / LVC-06 implementation review in the version-control plan.
+**Do not use the experimental `vcs.stage`, `vcs.unstage`, and `vcs.commit` methods.** They are not in the bridge allowlist and are not advertised by any released binary; the LVC-06 card that would enable them has not landed. The implementation behind them was corrected during LVC-02 — literal paths, a content-aware fence, an operation-specific publication record and a durable recovery answer — but an advertised method does not establish that it is safe or released, and the fixture deliberately omits them. `commit.create` retains its existing contract. See the LVC-02 / LVC-06 implementation review in the version-control plan.

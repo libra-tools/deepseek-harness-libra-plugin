@@ -220,7 +220,7 @@
 | DEP-ID | 提供方 | 消费方 | 产物 | 状态 |
 |---|---|---|---|---|
 | DEP-01 | LVC-01 | LVC-02, LVC-03 | frozen DSH/Libra contracts and repository-binding rules | frozen |
-| DEP-02 | LVC-02 | LVC-04, LVC-05, LVC-06 | negotiated typed read contract and generated fixture/TS types | incomplete: commits landed but implementation and provenance require correction and review |
+| DEP-02 | LVC-02 | LVC-04, LVC-05, LVC-06 | negotiated typed read contract and generated fixture/TS types | complete: implementation reviewed (PASS) and the fixture/receipt now prove the authority revision |
 | DEP-03 | LVC-03 | LVC-04, LVC-05, LVC-07, LVC-08 | per-Session binding and per-repository bridge service | planned |
 | DEP-04 | LVC-04 | LVC-05 | Host read service and readonly tool contracts | planned |
 | DEP-05 | LVC-05 | LVC-07 | read-only panel shell and selected-session UI context | planned |
@@ -302,7 +302,7 @@
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `in-progress` / ` `
+**Lifecycle / Acceptance:** `done` / `complete`
 
 **Description:** 在 Libra bridge 增加协商式、分页且有界的仓库 identity/status、diff 与 commit history/detail 查询，复用 Libra VCS 核心。Libra `3a22517` 需要实现级 review 和修复；此前的 locally-accepted 声明撤销。现有插件 fixture 的历史 authority receipt 未证明新增方法来自其标注的旧 revision，须重新建立可验证的来源。REL-01 在这些门通过前不得发布。
 
@@ -312,18 +312,18 @@
 
 **Acceptance criteria:**
 
-- [ ] 新增协议能力是 additive/minor-negotiated；旧 1.x peer 的既有行为不变，未知/未协商方法 fail closed。
-- [ ] Status 返回 repo identity、branch/HEAD/unborn 与分页状态项，区分 staged/unstaged/untracked/conflict/rename；无仓库与能力不足是结构化状态，不能伪装为空仓。
-- [ ] Log/detail 有 cursor pagination；diff 使用封闭 comparison enum 和 repo-relative path；binary/oversized/truncated 明示；响应 obey method/frame/page/byte limits。
-- [ ] 值全部来自 Libra 核心服务，禁止 SQL 直读、外部 `git` 进程、shell 文本解析或任意 revision/path。
-- [ ] 同步 Libra protocol fixture/schema、compatibility record、tests index 与相关 developer/command docs；注明 `status.get` 仍是 bridge telemetry。
-- [ ] ER-06/ER-12/ER-14：本卡同卡更新 Libra developer/protocol docs、plugin protocol schema 与 receiver contract；plugin README/site guide 为 N/A，理由是 Host/UI 尚未公开消费这些方法（由 LVC-04/05 在可用 slice 更新）；CLI command docs 已更新，因为 `libra agent bridge` 的方法清单变了。每项判定按仓记录。
+- [x] 新增协议能力是 additive/minor-negotiated；旧 1.x peer 的既有行为不变，未知/未协商方法 fail closed。
+- [x] Status 返回 repo identity、branch/HEAD/unborn 与分页状态项，区分 staged/unstaged/untracked/conflict/rename；无仓库与能力不足是结构化状态，不能伪装为空仓。
+- [x] Log/detail 有 cursor pagination；diff 使用封闭 comparison enum 和 repo-relative path；binary/oversized/truncated 明示；响应 obey method/frame/page/byte limits。
+- [x] 值全部来自 Libra 核心服务，禁止 SQL 直读、外部 `git` 进程、shell 文本解析或任意 revision/path。
+- [x] 同步 Libra protocol fixture/schema、compatibility record、tests index 与相关 developer/command docs；注明 `status.get` 仍是 bridge telemetry。
+- [x] ER-06/ER-12/ER-14：本卡同卡更新 Libra developer/protocol docs、plugin protocol schema 与 receiver contract；plugin README/site guide 为 N/A，理由是 Host/UI 尚未公开消费这些方法（由 LVC-04/05 在可用 slice 更新）；CLI command docs 已更新，因为 `libra agent bridge` 的方法清单变了。每项判定按仓记录。
 
 **Verification:**
 
-- [ ] From Libra repo root: `cargo test --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test` (new cases marked `(new)` in existing targets; do not add a new test target unless this card also registers it and updates `tests/INDEX.md`).
-- [ ] From Libra repo root: `cargo +nightly fmt --all --check`.
-- [ ] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test -- -D warnings`. Full `--all-targets` still stops in pre-existing `tests/codex_capture_local_test.rs` (`queries overflow the depth limit`); that file was not changed.
+- [x] From Libra repo root: `cargo test --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test` (new cases marked `(new)` in existing targets; do not add a new test target unless this card also registers it and updates `tests/INDEX.md`). 85 + 10 + 8 + 6 passed, 0 failed; the mutation and approval targets also pass (8 + 5), and the fault-injection build passes 111 in `agent_bridge_vcs_test`.
+- [x] From Libra repo root: `cargo +nightly fmt --all --check`.
+- [x] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_read_methods_test --test agent_bridge_protocol_test --test agent_bridge_schema_test -- -D warnings`. The full `--all-targets --all-features` run also passes now; the earlier `tests/codex_capture_local_test.rs` recursion limit is fixed upstream and that file is not in this card's write set.
 
 **Full-suite trigger:** `T-1`: 跨 protocol、VCS、compatibility/schema surfaces 的公共 bridge 合同变更；最终全量门仍由收口阶段执行。
 
@@ -331,7 +331,9 @@
 
 **Deliverables:** Libra typed bridge read API、fixture/schema、focused tests、兼容记录与 docs。
 
-**Implementation write set:** `libra: src/internal/ai/agent_bridge/protocol.rs; src/internal/ai/agent_bridge/methods.rs; src/internal/ai/agent_bridge/vcs.rs; tests/agent_bridge_vcs_test.rs; tests/agent_bridge_read_methods_test.rs; tests/agent_bridge_protocol_test.rs; tests/agent_bridge_schema_test.rs; tests/INDEX.md; docs/development/tracing/deepseek-harness.md; COMPATIBILITY.md; deepseek-harness-libra-plugin: protocol/agent-bridge.v1.schema.json; docs/protocol/agent-bridge-v1.md; tests/protocol/receiver.test.ts; libra-backend: N/A because these bridge methods are not yet exposed through the plugin UI/tool surface (documented at LVC-04/05)`.
+**Implementation write set:** `libra: src/internal/ai/agent_bridge/protocol.rs; src/internal/ai/agent_bridge/methods.rs; src/internal/ai/agent_bridge/vcs.rs; src/internal/ai/agent_bridge/vcs_read.rs; tests/agent_bridge_vcs_test.rs; tests/agent_bridge_read_methods_test.rs; tests/agent_bridge_protocol_test.rs; tests/agent_bridge_schema_test.rs; tests/INDEX.md; docs/development/tracing/deepseek-harness.md; docs/commands/agent.md; COMPATIBILITY.md; deepseek-harness-libra-plugin: protocol/agent-bridge.v1.schema.json; protocol/agent-bridge.v1.receipt.json; docs/protocol/agent-bridge-v1.md; tests/protocol/receiver.test.ts; libra-backend: N/A because these bridge methods are not yet exposed through the plugin UI/tool surface (documented at LVC-04/05)`.
+
+**Write-set expansion (2026-11-20, recorded):** 实现期发现实际改动超出原登记写集，按 ER-03 记录后使用：`libra: src/internal/ai/agent_bridge/{mutations,storage,vcs_write,publication,authorization,ingress,provenance,workspace,mod}.rs`（新文件 `src/internal/ai/agent_bridge/publication.rs`）、`src/command/commit.rs`、`src/internal/mutable_state_ownership.rs`、`src/utils/beneath.rs`、`src/utils/beneath/entry_identity.rs`、`src/utils/worktree_conversion.rs`、`Cargo.toml`、`docs/commands/agent.md`；plugin `protocol/agent-bridge.v1.receipt.json`。原因是写入协议与恢复协议共用 bridge 的 mutation/storage 层，LVC-02 与 LVC-06 在这些文件上不可分离，两者因此在同一个已复审提交 `ff89507` 落地：LVC-02 启用五个只读方法，LVC-06 的写入方法仍未进入 allowlist，其启用由 LVC-06 自己的提交完成。
 
 **Release write set:** `Inherited from REL-01 Libra bridge release`。
 
@@ -357,7 +359,7 @@
 
 **Split/dependency notes:** schema names are finalized by LVC-01; do not repurpose legacy `status.get`, `history.search`, or `diff.get` semantics.
 
-**修订历史:** 2026-11-19 在干净 `main` 副本实现并推送 `3a22517`。只读方法在 `vcs_read.rs`，不改写 dirty 工作区。
+**修订历史:** 2026-11-19 在干净 `main` 副本实现并推送 `3a22517`。只读方法在 `vcs_read.rs`，不改写 dirty 工作区。2026-11-20 在隔离的 `main` 工作区完成实现级复审（30 轮 Codex 只读复审，第 30 轮 `VERDICT: PASS`），并推送 `ff89507`（启用五个 minor 1 只读方法，allowlist 20→25，写方法仍未启用）与 `7577397`（`docs/commands/agent.md` 的方法清单）。plugin fixture/receipt/receiver contract 同步到权威 revision `ff895071882e05c4bdfe4a227976bc3ad77ac0d4`（`libra 0.30.217`）。REL-01 尚未切，LVC-03 及之后的卡仍不得开工。
 
 ### Task LVC-03: Bind bridge runtime per Harness Session repository
 
@@ -985,3 +987,5 @@ Codex 对 Libra `771e994..6651ccf` 只读审查结论 **VERDICT: FAIL**，0 项�
 | 2026-11-19 | LVC-01 Codex R2 | PASS on `46da7d71e7af16ee51a0bd6f021795f0d734b3426a34b0aaa3ae003515b275db`：0×P0 / 0×P1。发现三元组的 workdir 与 common storage 已分开；proposed `vcs.*` 仍未实现。本行是评审后的结案记录。 | **PASS** |
 | 2026-11-19 | LVC-02 | Libra `main` `3a22517` 增加 minor 1 的 `vcs.identity/status/diff/log/show`。此前修改旧 receipt 的 fixture 摘要，但未证明新增条目来自旧 authority revision；撤销 locally-accepted，待修正 provenance 并完成实现评审。全量 clippy 仍被未改动的 `codex_capture_local_test` 递归上限拦住。 | 不通过，待修复 |
 | 2026-11-19 | LVC-06 | Libra `main` `6651ccf` 增加 minor 2 的 `vcs.stage/unstage/commit`。当时声称过期 fence 在写入前拒绝，后续检查发现该结论不成立（只哈希第一页且检查与写入非原子）；撤销 locally-accepted。REL-01 未切，LVC-03 仍不得开工。 | 不通过，待修复 |
+| 2026-11-20 | LVC-02 实现复审 | 30 轮 Codex 只读复审（`codex exec --sandbox read-only --skip-git-repo-check`，模型 gpt-6.1-terra）。前 29 轮各暴露 1 个 P0/P1（终态识别、拒绝标记与原始 ID 混淆、条件写入拒绝未处理、恢复路径与写回结果之间的竞态、review 存活判定、提交恢复与记录之间的窗口等），每轮修复后补回归；第 30 轮 `VERDICT: PASS`，0×P0/0×P1。 | **PASS** |
+| 2026-11-20 | LVC-02 交付 | Libra `main` `ff89507`（启用五个 minor 1 typed read，allowlist 20→25，写方法仍未启用）与 `7577397`（CLI 命令文档方法清单）；plugin fixture/receipt/receiver contract 指向权威 revision `ff89507`（`libra 0.30.217`）。门禁：Libra `agent_bridge_vcs_test` 85、`read_methods` 10、`protocol` 8、`schema` 6、`mutation` 8、`approval` 5 全通过，故障注入构建 111 通过，`cargo +nightly fmt --all --check` 通过，`cargo clippy --all-targets --all-features -- -D warnings` 通过；plugin `vitest` 122 通过/5 跳过，`tsc -b` 与 bundle 构建通过，ESLint 对受版本控制的源文件无错误（`.release-artifacts/` 的 200 个错误来自本地暂存目录，非本卡改动）。 | 接受 |

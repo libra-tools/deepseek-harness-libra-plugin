@@ -2,16 +2,16 @@
   "protocol_version": { "major": 1, "minor": 2 },
   "authority": {
     "repository": "libra",
-    "revision": "a92b29e8fc9ad514ebe2e6c53216845aa059d94f",
+    "revision": "ff895071882e05c4bdfe4a227976bc3ad77ac0d4",
     "protocol_source": "src/internal/ai/agent_bridge/protocol.rs",
-    "protocol_source_sha256": "5a47f2dfdcf0d7ec6a0c1d97f9955cfff321a45323546f2f7a230d007bbf46dc",
+    "protocol_source_sha256": "27dfed0897e97d6a99d4d0bd283f79351bd2ebc76e3950847d0e915c0e9d03b3",
     "golden_frame": "tests/fixtures/agent_bridge/initialize.ndjson",
     "golden_frame_sha256": "b34ac2e5d9b17af4450508360c671845156a6808ebe491ec9a7036633065f753",
-    "libra_version": "0.21.25"
+    "libra_version": "0.30.217"
   },
   "fixture": {
     "path": "protocol/agent-bridge.v1.schema.json",
-    "sha256": "f65daf162ad73ce994e246928d7caf7db042f48fb9dd9449e41f88ef502ce28a"
+    "sha256": "eabdff104ce44b895521a6a368c4ed5dc9b5b0181639a51d46a60c7348e5bfd1"
   },
-  "checked_at": "2026-09-07"
+  "checked_at": "2026-11-20"
 }

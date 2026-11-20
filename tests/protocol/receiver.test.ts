@@ -47,10 +47,22 @@ describe("protocol receiver", () => {
       return;
     }
     expect(receiver.contract.protocol_version).toEqual({ major: 1, minor: 2 });
-    expect(receiver.contract.methods).toHaveLength(22);
+    // The fixture carries the plugin's contract: the original bridge methods,
+    // the optional memory facades a released binary advertises, and the five
+    // typed reads the authority revision added.
+    expect(receiver.contract.methods).toHaveLength(27);
     expect(receiver.contract.methods[8]).toBe("memory.recall");
     expect(receiver.contract.methods[9]).toBe("memory.episode.record");
-    expect(receiver.contract.methods.some((method) => method.startsWith("vcs."))).toBe(false);
+    expect(receiver.contract.methods).toContain("vcs.identity");
+    expect(receiver.contract.methods).toContain("vcs.status");
+    expect(receiver.contract.methods).toContain("vcs.diff");
+    expect(receiver.contract.methods).toContain("vcs.log");
+    expect(receiver.contract.methods).toContain("vcs.show");
+    // The typed writes stay out of the contract until LVC-06.
+    expect(receiver.contract.methods).not.toContain("vcs.stage");
+    expect(receiver.contract.methods).not.toContain("vcs.unstage");
+    expect(receiver.contract.methods).not.toContain("vcs.commit");
+    expect(receiver.contract.methods).not.toContain("vcs.fence");
     expect(receiver.contract.limits.max_frame_bytes).toBe(256 * 1024);
     expect(receiver.contract.source).toBe("deepseek-harness");
     expect(receiver.contract.error_codes.memory_digest_unavailable).toEqual({
@@ -62,6 +74,11 @@ describe("protocol receiver", () => {
       code: -32603,
       stable_code: "LBR-MEMORY-005",
       retryable: true,
+    });
+    expect(receiver.contract.error_codes.stale_fence).toEqual({
+      code: 1011,
+      stable_code: "LBR-AGENT-038",
+      retryable: false,
     });
   });
 

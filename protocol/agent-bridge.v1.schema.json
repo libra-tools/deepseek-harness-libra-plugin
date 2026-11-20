@@ -3,10 +3,10 @@
   "source": "deepseek-harness",
   "jsonrpc_version": "2.0",
   "fixture_provenance": {
-    "libra_version": "0.21.25",
+    "libra_version": "0.30.217",
     "fixture_origin": "src/internal/ai/agent_bridge/protocol.rs",
     "golden_frames_path": "tests/fixtures/agent_bridge/initialize.ndjson",
-    "authority_revision": "a92b29e8fc9ad514ebe2e6c53216845aa059d94f"
+    "authority_revision": "ff895071882e05c4bdfe4a227976bc3ad77ac0d4"
   },
   "methods": [
     "initialize",
@@ -30,7 +30,12 @@
     "review.run",
     "workspace.claim",
     "workspace.renew",
-    "workspace.release"
+    "workspace.release",
+    "vcs.identity",
+    "vcs.status",
+    "vcs.diff",
+    "vcs.log",
+    "vcs.show"
   ],
   "limits": {
     "max_frame_bytes": 262144,
