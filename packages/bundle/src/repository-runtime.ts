@@ -1,5 +1,5 @@
 /** Host-owned per-Session Libra bridge lifecycle (plan-20261118 LVC-03). */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -125,13 +125,6 @@ export async function applyPerSession(
     `${sessionId.replace(/[^A-Za-z0-9._:-]/g, "_")}.${identityKey.replace(/[^A-Za-z0-9._:-]/g, "_")}.jsonl`;
   const spoolPath = (sessionId: string, identityKey: string): string =>
     join(spoolRoot, spoolName(sessionId, identityKey));
-  /** Repository association of the events still waiting for a bridge. */
-  const scopesFor = (sessionId: string): string[] => {
-    const remembered = registry.sessionBindingRecord(sessionId);
-    const identity = remembered === undefined ? undefined : registry.sessionBinding(sessionId)?.key;
-    void identity;
-    return remembered === undefined ? ["unbound"] : [remembered.key, "unbound"];
-  };
   const spoolEvent = (session: Session, event: BufferedSessionEvent, scope: string): boolean => {
     const sessionId = String(session.id);
     const path = spoolPath(sessionId, scope);
