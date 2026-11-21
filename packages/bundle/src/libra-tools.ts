@@ -232,7 +232,11 @@ export interface ResolvedTools {
   listTools(): ReturnType<ToolsFacade["listTools"]>;
   getPolicy(): ReturnType<ToolsFacade["getPolicy"]>;
   supports(method: string): boolean;
-  invoke(name: string, params: ToolInput & Record<string, unknown>): Promise<import("@libra/dsh-tools").ToolResult>;
+  invoke(
+    name: string,
+    params: ToolInput & Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<import("@libra/dsh-tools").ToolResult>;
 }
 
 export type ToolsResolver = (session: Session | undefined) => Promise<ResolvedTools | undefined>;
@@ -299,7 +303,7 @@ async function invokeLibra(
   } else if (def.risk === "read") {
     input.operation_id ??= randomUUID();
   }
-  const result = await tools.invoke(def.name, input);
+  const result = await tools.invoke(def.name, input, exec.signal);
   if (result.status === "error") throw bridgeError(result);
   if (result.data === undefined) return {};
   // Bridge payloads are lossless JSON by contract, so a structural cast is safe.

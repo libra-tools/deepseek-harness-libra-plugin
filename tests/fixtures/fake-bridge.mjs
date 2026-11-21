@@ -292,6 +292,16 @@ rl.on("line", (line) => {
     return;
   }
   if (frame.method === "vcs.status") {
+    if (frame.params?.cursor === "stall") {
+      // Late response for a cancelled caller: the client must drop it without
+      // failing the connection.
+      setTimeout(() => writeResponse({
+        jsonrpc: "2.0",
+        result: { entries: [], cursor: { next: null } },
+        id,
+      }), 600);
+      return;
+    }
     writeResponse({
       jsonrpc: "2.0",
       result: { entries: [{ path: "src/a.ts", state: "staged", oldPath: null }], cursor: { next: null } },

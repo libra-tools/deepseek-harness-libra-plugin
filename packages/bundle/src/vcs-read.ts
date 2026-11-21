@@ -111,26 +111,33 @@ function failureToHostError(failure: BindingFailure): VcsHostError {
   }
 }
 
+/** One shared in-flight read plus the callers currently waiting on it. */
+interface SharedRead<T> {
+  readonly work: Promise<T>;
+  readonly controller: AbortController;
+  waiters: number;
+}
+
 /** Host read service provided as `libraVcsRead`; the model cannot call it. */
 export class LibraVcsReadService {
-  private readonly inflight = new Map<string, Promise<unknown>>();
+  private readonly inflight = new Map<string, SharedRead<unknown>>();
 
   constructor(private readonly resolve: VcsScopeResolver) {}
 
   status(session: unknown, params: VcsStatusParams = {}, options: VcsReadOptions = {}): Promise<VcsStatusResult> {
-    return this.call(session, "status", params, options, (read) => read.status(params));
+    return this.call(session, "status", params, options, (read, signal) => read.status(params, signal));
   }
 
   diff(session: unknown, params: VcsDiffParams, options: VcsReadOptions = {}): Promise<VcsDiffResult> {
-    return this.call(session, "diff", params, options, (read) => read.diff(params));
+    return this.call(session, "diff", params, options, (read, signal) => read.diff(params, signal));
   }
 
   log(session: unknown, params: VcsLogParams = {}, options: VcsReadOptions = {}): Promise<VcsLogResult> {
-    return this.call(session, "log", params, options, (read) => read.log(params));
+    return this.call(session, "log", params, options, (read, signal) => read.log(params, signal));
   }
 
   show(session: unknown, params: VcsShowParams, options: VcsReadOptions = {}): Promise<VcsShowResult> {
-    return this.call(session, "show", params, options, (read) => read.show(params));
+    return this.call(session, "show", params, options, (read, signal) => read.show(params, signal));
   }
 
   private async call<T>(
@@ -138,7 +145,7 @@ export class LibraVcsReadService {
     method: "status" | "diff" | "log" | "show",
     params: unknown,
     options: VcsReadOptions,
-    run: (read: VcsReadMethods) => Promise<T>,
+    run: (read: VcsReadMethods, signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
     if (isCancelled(options.signal)) throw new VcsHostError("cancelled", "the read was cancelled");
     if (options.requestId !== undefined
@@ -162,21 +169,35 @@ export class LibraVcsReadService {
 
     await resolution.scope.validate();
     const key = `${sessionId}\u0000${resolution.scope.bindingKey}\u0000${resolution.scope.generation}\u0000${JSON.stringify(options.requestId ?? null)}\u0000${method}\u0000${JSON.stringify(params)}`;
-    const shared = this.inflight.get(key);
-    if (shared !== undefined) return this.await(shared as Promise<T>, options.signal, resolution.scope.validate);
-
-    const work = (async (): Promise<T> => {
-      try {
-        return await run(resolution.scope.read);
-      } catch (error) {
-        throw toHostError(error);
+    let shared = this.inflight.get(key) as SharedRead<T> | undefined;
+    if (shared === undefined) {
+      const controller = new AbortController();
+      const work = (async (): Promise<T> => {
+        try {
+          return await run(resolution.scope.read, controller.signal);
+        } catch (error) {
+          throw toHostError(error);
+        }
+      })();
+      shared = { work, controller, waiters: 0 };
+      this.inflight.set(key, shared as SharedRead<unknown>);
+      void work.finally(() => {
+        if (this.inflight.get(key) === shared) this.inflight.delete(key);
+      }).catch(() => undefined);
+    }
+    const entry = shared;
+    entry.waiters += 1;
+    try {
+      return await this.await(entry.work, options.signal, resolution.scope.validate);
+    } finally {
+      entry.waiters -= 1;
+      // When the last waiter cancelled, cancel the underlying bridge request
+      // too, so a stalled stale page cannot keep the bridge queue occupied.
+      if (entry.waiters === 0 && isCancelled(options.signal) && !entry.controller.signal.aborted) {
+        entry.controller.abort();
+        if (this.inflight.get(key) === entry) this.inflight.delete(key);
       }
-    })();
-    this.inflight.set(key, work);
-    void work.finally(() => {
-      if (this.inflight.get(key) === work) this.inflight.delete(key);
-    }).catch(() => undefined);
-    return this.await(work, options.signal, resolution.scope.validate);
+    }
   }
 
   /** Await one caller's read, cancel only that waiter, then recheck its binding. */
@@ -238,6 +259,7 @@ export async function invokeVcsReadTool(
   session: unknown,
   toolName: string,
   input: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<VcsToolResult> {
   const definition = READ_TOOL_PARAMETERS[toolName];
   const operationId = typeof input["operation_id"] === "string" ? input["operation_id"] : `read-${Date.now()}`;
@@ -261,14 +283,15 @@ export async function invokeVcsReadTool(
   for (const key of definition.params) {
     if (input[key] !== undefined) params[key] = input[key];
   }
+  const options = signal === undefined ? {} : { signal };
   try {
     const data = definition.method === "diff"
-      ? await service.diff(session, params as never)
+      ? await service.diff(session, params as never, options)
       : definition.method === "show"
-        ? await service.show(session, params as never)
+        ? await service.show(session, params as never, options)
         : definition.method === "status"
-          ? await service.status(session, params as never)
-          : await service.log(session, params as never);
+          ? await service.status(session, params as never, options)
+          : await service.log(session, params as never, options);
     return { schema_version: "1", operation_id: operationId, status: "ok", data };
   } catch (caught) {
     if (caught instanceof VcsHostError) return error(caught.kind, caught.message, caught.retryable);

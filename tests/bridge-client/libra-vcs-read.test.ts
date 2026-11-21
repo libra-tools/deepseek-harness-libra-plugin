@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   VCS_READ_METHODS,
+  VcsReadError,
   VcsReadMethods,
   type BridgeClient,
   type CompletedRequest,
@@ -131,8 +132,8 @@ describe("typed VCS read methods", () => {
       // The aggregate says untruncated while a file is binary.
       { sides: "worktree-vs-index", byteCap: 131072, truncated: false, truncation: "none",
         files: [{ path: "a.ts", oldPath: null, patch: null, truncated: true, truncation: "binary" }] },
-      // The aggregate claims a page cap while no file is truncated at all.
-      { sides: "worktree-vs-index", byteCap: 131072, truncated: true, truncation: "page_cap",
+      // The aggregate claims a page cap but is not marked truncated.
+      { sides: "worktree-vs-index", byteCap: 131072, truncated: false, truncation: "page_cap",
         files: [{ path: "a.ts", oldPath: null, patch: "diff", truncated: false, truncation: "none" }] },
       // A binary file must carry the truncated flag.
       { sides: "worktree-vs-index", byteCap: 131072, truncated: true, truncation: "binary",
@@ -142,6 +143,16 @@ describe("typed VCS read methods", () => {
       const { client } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, data));
       await expect(new VcsReadMethods(client).diff({ sides: "worktree-vs-index" })).rejects.toMatchObject({ kind: "internal" });
     }
+  });
+
+  it("accepts a page-capped diff whose returned files are all complete", async () => {
+    const { client } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, {
+      sides: "worktree-vs-index", byteCap: 131072, truncated: true, truncation: "page_cap",
+      files: [{ path: "a.ts", oldPath: null, patch: "diff --git a/a.ts b/a.ts", truncated: false, truncation: "none" }],
+    }));
+    const diff = await new VcsReadMethods(client).diff({ sides: "worktree-vs-index", limit: 1 });
+    expect(diff).toMatchObject({ truncated: true, truncation: "page_cap" });
+    expect(diff.files[0]).toMatchObject({ path: "a.ts", truncated: false, truncation: "none" });
   });
 
   it("rejects a diff whose response scope differs from the requested selector", async () => {
@@ -387,6 +398,33 @@ describe("Host read service", () => {
     await first;
     await second;
     expect(fake.requests).toHaveLength(2);
+  });
+
+  it("aborts the underlying bridge request when its last waiter cancels", async () => {
+    const calls: Array<{ params: unknown; signal: AbortSignal | undefined }> = [];
+    const abortable = {
+      get negotiatedCapabilities() {
+        return { protocol: { major: 1, minor: 2 }, limits: {}, methods: [...VCS_READ_METHODS], source: "fake" };
+      },
+      requestMethod(_method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<CompletedRequest> {
+        calls.push({ params, signal });
+        return new Promise((_resolve, reject) => {
+          const onAbort = (): void => reject(new VcsReadError("cancelled", "cancelled"));
+          if (signal?.aborted === true) onAbort();
+          else signal?.addEventListener("abort", onAbort, { once: true });
+        });
+      },
+    } as unknown as BridgeClient;
+    const service = new LibraVcsReadService(async () => ({
+      ok: true,
+      scope: { read: new VcsReadMethods(abortable), methods: [...VCS_READ_METHODS], bindingKey: "k1", generation: 1, validate: async () => undefined },
+    }));
+    const controller = new AbortController();
+    const cancelled = service.log({ id: "s-1" }, {}, { signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ kind: "cancelled" });
+    expect(calls[0]?.signal?.aborted).toBe(true);
   });
 
   it("maps binding failures onto machine-distinguishable Host errors", async () => {

@@ -29,6 +29,7 @@ export class BridgeClientError extends Error {
     | "protocol_violation"
     | "queue_full"
     | "request_timeout"
+    | "request_cancelled"
     | "child_crashed";
 
   constructor(code: BridgeClientError["code"], message: string) {
@@ -42,6 +43,8 @@ interface PendingWaiter {
   resolve: (response: JsonRpcResponse) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout> | undefined;
+  /** Detach the caller's abort listener when this waiter settles. */
+  cleanup?: () => void;
 }
 
 interface InternalState {
@@ -53,6 +56,8 @@ interface InternalState {
   disposed: boolean;
   lineReader: ReturnType<typeof createInterface>;
   pendingById: Map<string, PendingWaiter>;
+  /** Ids whose caller cancelled; a late response is discarded, not a violation. */
+  abandoned: Set<string>;
   exitPromise: Promise<void>;
 }
 
@@ -147,6 +152,7 @@ export class BridgeClient {
       disposed: false,
       lineReader,
       pendingById,
+      abandoned: new Set<string>(),
       exitPromise,
     };
 
@@ -240,7 +246,12 @@ export class BridgeClient {
     return result;
   }
 
-  async requestMethod(method: string, params?: unknown): Promise<CompletedRequest> {
+  /**
+   * Send one request. An optional signal cancels the caller's wait; an
+   * in-flight frame keeps its id reserved so a late response is discarded
+   * instead of being treated as an unexpected reply.
+   */
+  async requestMethod(method: string, params?: unknown, signal?: AbortSignal): Promise<CompletedRequest> {
     const state = this.state;
     if (!state || state.disposed) {
       throw new BridgeClientError("not_connected", "bridge client is not connected");
@@ -252,8 +263,16 @@ export class BridgeClient {
       throw new BridgeClientError("queue_full", "bridge request queue is full");
     }
 
+    if (signal?.aborted === true) {
+      throw new BridgeClientError("request_cancelled", `request ${method} was cancelled before dispatch`);
+    }
     this.queuedRequests += 1;
-    const operation = this.requestTail.then(() => this.performRequest(state, method, params));
+    const operation = this.requestTail.then(() => {
+      if (signal?.aborted === true) {
+        throw new BridgeClientError("request_cancelled", `request ${method} was cancelled before dispatch`);
+      }
+      return this.performRequest(state, method, params, signal);
+    });
     this.requestTail = operation.then(
       () => undefined,
       () => undefined,
@@ -292,11 +311,12 @@ export class BridgeClient {
     state: InternalState,
     method: string,
     params?: unknown,
+    signal?: AbortSignal,
   ): Promise<CompletedRequest> {
     if (state.disposed || this.state !== state) {
       throw new BridgeClientError("not_connected", "bridge client is not connected");
     }
-    const response = await this.request(state, method, params);
+    const response = await this.request(state, method, params, signal);
     const id = response.id ?? state.nextId - 1;
     const terminal = classifyTerminalState(response);
     const completed: CompletedRequest = {
@@ -332,9 +352,13 @@ export class BridgeClient {
       const key = requestKey(response.id);
       const pending = state.pendingById.get(key);
       if (!pending) {
+        // A cancelled caller keeps its id reserved so its late frame is dropped
+        // rather than failing the whole connection.
+        if (state.abandoned.delete(key)) return;
         throw new BridgeClientError("protocol_violation", `unexpected response id ${key}`);
       }
       clearTimeout(pending.timer);
+      pending.cleanup?.();
       state.pendingById.delete(key);
       pending.resolve(response);
     } catch (error) {
@@ -354,6 +378,7 @@ export class BridgeClient {
     state.child.stdin?.end();
     for (const pending of state.pendingById.values()) {
       clearTimeout(pending.timer);
+      pending.cleanup?.();
       pending.reject(error);
     }
     state.pendingById.clear();
@@ -364,6 +389,7 @@ export class BridgeClient {
     state: InternalState,
     method: string,
     params?: unknown,
+    signal?: AbortSignal,
   ): Promise<JsonRpcResponse> {
     if (state.disposed) {
       return Promise.reject(new BridgeClientError("not_connected", "bridge client disposed"));
@@ -416,10 +442,38 @@ export class BridgeClient {
         );
       }, this.config.requestTimeoutMs ?? 60_000);
 
-      state.pendingById.set(key, { resolve, reject, timer });
+      let detached = false;
+      const abandon = (): void => {
+        if (detached) return;
+        const pending = state.pendingById.get(key);
+        if (pending === undefined) return;
+        clearTimeout(pending.timer);
+        pending.cleanup?.();
+        state.pendingById.delete(key);
+        state.abandoned.add(key);
+        state.requests.set(key, {
+          id,
+          method,
+          state: "error_fatal",
+          error: { code: 1010, message: `request ${method} was cancelled by its caller` },
+        });
+        reject(new BridgeClientError("request_cancelled", `request ${method} was cancelled`));
+      };
+      const detach = (): void => {
+        detached = true;
+        signal?.removeEventListener("abort", abandon);
+      };
+      state.pendingById.set(key, { resolve, reject, timer, cleanup: detach });
+
+      if (signal?.aborted === true) {
+        abandon();
+        return;
+      }
+      signal?.addEventListener("abort", abandon, { once: true });
 
       if (!state.child.stdin) {
         clearTimeout(timer);
+        detach();
         state.pendingById.delete(key);
         reject(new BridgeClientError("protocol_violation", "bridge child stdin is unavailable"));
         return;
@@ -427,6 +481,7 @@ export class BridgeClient {
       state.child.stdin.write(frame, (error) => {
         if (error) {
           clearTimeout(timer);
+          detach();
           state.pendingById.delete(key);
           state.requests.set(key, {
             id,

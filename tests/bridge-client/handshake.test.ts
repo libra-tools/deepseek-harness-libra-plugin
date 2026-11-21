@@ -245,3 +245,26 @@ describe("bridge-client crash recovery", () => {
     await client.close();
   });
 });
+
+describe("bridge-client cancellation", () => {
+  it("cancels a stalled request, drops its late frame and keeps the connection usable", async () => {
+    const client = makeClient();
+    try {
+      await client.connect();
+      const controller = new AbortController();
+      const stalled = client.requestMethod("vcs.status", { cursor: "stall" }, controller.signal);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      controller.abort();
+      await expect(stalled).rejects.toMatchObject({ code: "request_cancelled" });
+
+      const afterCancel = await client.requestMethod("vcs.log", {});
+      expect(afterCancel.state).toBe("success");
+
+      // The cancelled request's frame still arrives later and must be dropped.
+      const stillUsable = await client.requestMethod("vcs.status", {});
+      expect(stillUsable.state).toBe("success");
+    } finally {
+      await client.close();
+    }
+  }, 10_000);
+});

@@ -584,11 +584,11 @@ export async function applyPerSession(
       listTools: () => facade.listTools(),
       getPolicy: () => facade.getPolicy(),
       supports: (method) => facade.supports(method),
-      invoke: async (name, params) => {
+      invoke: async (name, params, signal) => {
         // The typed read tools share the Host service with the panel, so both
         // paths validate cursors/parameters and report the same failure kinds.
         if (vcsToolNames.has(name)) {
-          return invokeVcsReadTool(vcsReadService, session, name, params);
+          return invokeVcsReadTool(vcsReadService, session, name, params, signal);
         }
         return facade.invoke(name, params);
       },

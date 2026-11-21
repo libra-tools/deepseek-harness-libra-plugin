@@ -8,7 +8,7 @@
  * cursor or a scope mismatch. Responses are projected onto the documented
  * shapes instead of being passed through untyped.
  */
-import type { BridgeClient } from "./client.js";
+import { BridgeClientError, type BridgeClient } from "./client.js";
 import type { CompletedRequest, JsonRpcErrorObject } from "./types.js";
 
 export const VCS_READ_METHODS = ["vcs.status", "vcs.diff", "vcs.log", "vcs.show"] as const;
@@ -25,6 +25,7 @@ export type VcsReadFailureKind =
   | "invalid_params"
   | "cursor_invalid"
   | "scope_mismatch"
+  | "cancelled"
   | "stale_state"
   | "conflict"
   | "protocol_mismatch"
@@ -331,11 +332,11 @@ export class VcsReadMethods {
     }
   }
 
-  async status(params: VcsStatusParams = {}): Promise<VcsStatusResult> {
+  async status(params: VcsStatusParams = {}, signal?: AbortSignal): Promise<VcsStatusResult> {
     const payload = await this.call("vcs.status", {
       cursor: validateCursor(params.cursor),
       ...(validateLimit(params.limit) !== undefined ? { limit: params.limit } : {}),
-    });
+    }, signal);
     const entries = arrayField(payload, "entries", "vcs.status").map((entry) => {
       if (!isRecord(entry)) malformed("vcs.status", "entries[]");
       return {
@@ -347,7 +348,7 @@ export class VcsReadMethods {
     return { entries, cursor: cursorOf(payload, "vcs.status") };
   }
 
-  async diff(params: VcsDiffParams): Promise<VcsDiffResult> {
+  async diff(params: VcsDiffParams, signal?: AbortSignal): Promise<VcsDiffResult> {
     if (!DIFF_SIDES.includes(params.sides)) {
       throw new VcsReadError("invalid_params", `sides must be one of ${DIFF_SIDES.join(", ")}`);
     }
@@ -365,7 +366,7 @@ export class VcsReadMethods {
       ...(oid !== undefined ? { oid } : {}),
       paths,
       ...(limit !== undefined ? { limit } : {}),
-    });
+    }, signal);
     if (stringField(payload, "sides", "vcs.diff") !== params.sides) malformed("vcs.diff", "sides");
     const byteCap = payload["byteCap"];
     const truncated = payload["truncated"];
@@ -389,24 +390,30 @@ export class VcsReadMethods {
       if (!consistentFileTruncation(entry)) malformed("vcs.diff", "files[] metadata");
       return entry;
     });
-    // The aggregate flag must describe the aggregate of the file metadata.
-    if (truncated !== files.some((file) => file.truncated)) malformed("vcs.diff", "truncated");
+    // The aggregate flag describes the files plus what the page omitted: a
+    // page-capped diff legitimately reports truncation while every returned
+    // file is complete.
+    if (truncated !== (files.some((file) => file.truncated) || truncation === "page_cap")) {
+      malformed("vcs.diff", "truncated");
+    }
     if (truncation === "none") {
-      if (files.some((file) => file.truncation !== "none")) malformed("vcs.diff", "truncation");
+      if (truncated || files.some((file) => file.truncation !== "none")) malformed("vcs.diff", "truncation");
     } else if (truncation === "binary") {
       // A binary aggregate needs a binary file that is marked truncated.
       if (!files.some((file) => file.truncation === "binary" && file.truncated)) malformed("vcs.diff", "truncation");
-    } else if (!truncated || files.every((file) => file.truncation === "none")) {
+    } else if (truncation === "byte_cap") {
+      if (!files.some((file) => file.truncation === "byte_cap" && file.truncated)) malformed("vcs.diff", "truncation");
+    } else if (!truncated) {
       malformed("vcs.diff", "truncation");
     }
     return { sides: params.sides, byteCap, truncated, truncation, files };
   }
 
-  async log(params: VcsLogParams = {}): Promise<VcsLogResult> {
+  async log(params: VcsLogParams = {}, signal?: AbortSignal): Promise<VcsLogResult> {
     const payload = await this.call("vcs.log", {
       cursor: validateCursor(params.cursor),
       ...(validateLimit(params.limit) !== undefined ? { limit: params.limit } : {}),
-    });
+    }, signal);
     const commits = arrayField(payload, "commits", "vcs.log").map((commit) => {
       if (!isRecord(commit)) malformed("vcs.log", "commits[]");
       const authorTime = commit["authorTime"];
@@ -420,13 +427,13 @@ export class VcsReadMethods {
     return { commits, cursor: cursorOf(payload, "vcs.log") };
   }
 
-  async show(params: VcsShowParams): Promise<VcsShowResult> {
+  async show(params: VcsShowParams, signal?: AbortSignal): Promise<VcsShowResult> {
     const oid = validateOid(params.oid);
     const payload = await this.call("vcs.show", {
       oid,
       cursor: validateCursor(params.cursor),
       ...(validateLimit(params.limit) !== undefined ? { limit: params.limit } : {}),
-    });
+    }, signal);
     const returnedOid = stringField(payload, "oid", "vcs.show");
     const parents = arrayField(payload, "parents", "vcs.show").map((parent) =>
       typeof parent === "string" ? parent : malformed("vcs.show", "parents[]"));
@@ -447,12 +454,19 @@ export class VcsReadMethods {
     };
   }
 
-  private async call(method: VcsReadMethod, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async call(
+    method: VcsReadMethod,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
     this.require([method]);
     let response: CompletedRequest;
     try {
-      response = await this.bridge.requestMethod(method, params);
+      response = await this.bridge.requestMethod(method, params, signal);
     } catch (error) {
+      if (error instanceof BridgeClientError && error.code === "request_cancelled") {
+        throw new VcsReadError("cancelled", `the ${method} read was cancelled`);
+      }
       throw new VcsReadError("disconnected", `the bridge request failed: ${String(error)}`, { retryable: true });
     }
     if (response.state !== "success") {
