@@ -1147,6 +1147,71 @@ describe("Libra panel component flows", () => {
     panel.unmount();
   });
 
+  it("hides reads completed before a failed initial binding check", async () => {
+    const tracker = remoteHarness();
+    tracker.manualBinding();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.take("status").resolve({
+      ok: true,
+      data: { entries: [{ path: "premature-a.ts", state: "staged", oldPath: null }], cursor: { next: null }, bindingKey: "key-a", bindingGeneration: 1 },
+    });
+    tracker.take("log").resolve({
+      ok: true,
+      data: { commits: [{ oid: "a".repeat(40), summary: "premature-a", authorTime: 1 }], cursor: { next: null }, bindingKey: "key-a", bindingGeneration: 1 },
+    });
+    await panel.settle();
+
+    tracker.resolveBinding({ ok: false, error: { kind: "no_working_directory", message: "unbound" } });
+    tracker.resolveBinding({ ok: false, error: { kind: "no_working_directory", message: "unbound" } });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("t:panelUnbound");
+    expect(textOf(panel.tree)).not.toContain("premature-a.ts");
+    expect(textOf(panel.tree)).not.toContain("aaaaaaaa premature-a");
+    panel.unmount();
+  });
+
+  it("refuses a commit file page read under another binding", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve(logPage("first"));
+    await panel.settle();
+
+    const commit = button(panel.tree, "aaaaaaaa first");
+    commit!();
+    await tick();
+    tracker.take("show").resolve({
+      ok: true,
+      data: {
+        oid: "a".repeat(40), summary: "first", parents: [],
+        files: [{ path: "page-one.ts", state: "staged", oldPath: null }],
+        cursor: { next: "1" },
+        bindingKey: "key-1", bindingGeneration: 1,
+      },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("page-one.ts");
+
+    const moreFiles = button(panel.tree, "t:detailMore");
+    moreFiles!();
+    await tick();
+    tracker.take("show").resolve({
+      ok: true,
+      data: {
+        oid: "a".repeat(40), summary: "first", parents: [],
+        files: [{ path: "foreign-two.ts", state: "staged", oldPath: null }],
+        cursor: { next: null },
+        bindingKey: "key-2", bindingGeneration: 2,
+      },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree)).not.toContain("foreign-two.ts");
+    expect(textOf(panel.tree)).not.toContain("page-one.ts");
+    panel.unmount();
+  });
+
   it("keeps two mounted Sessions isolated", async () => {
     const first = remoteHarness();
     const second = remoteHarness();

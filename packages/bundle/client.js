@@ -596,6 +596,16 @@ globalThis.__ModuleLoader__.load({
         clearChannel(channel);
         setErrors((current) => ({ ...current, [channel]: "panelMoved" }));
       };
+      const clearAllViews = () => {
+        abortAll();
+        readIdentities.current.clear();
+        setStatus({ entries: [], next: null });
+        setHistory({ commits: [], next: null, loading: false });
+        setSelected(null);
+        setDiff(null);
+        setDetail(null);
+        setDiagnostics({ available: false });
+      };
       // Accept a read only for the binding the panel has validated. A result
       // that belongs to another binding is dropped per channel (never a full
       // refresh, which could re-enter with stale reads again).
@@ -632,8 +642,12 @@ globalThis.__ModuleLoader__.load({
           const previous = bindingState.current;
           if (result === undefined || result.ok !== true) {
             bindingState.current = { key: null, generation: null, ok: false, initialized: true };
-            // A binding that used to serve this tab stopped doing so: clear it.
-            if (previous.initialized && (previous.ok || previous.key !== null)) refresh();
+            clearAllViews();
+            setValidationFailed(false);
+            const view = result === undefined
+              ? { state: "error", key: "panelError" }
+              : failureState(result);
+            setBinding(view);
             return;
           }
           const changed = previous.ok !== true
@@ -671,7 +685,10 @@ globalThis.__ModuleLoader__.load({
         .catch(() => {
           if (checkSequence.current !== mine) return;
           // A rejected identity check cannot prove the cached rows belong to
-          // the current binding; fail closed until a later check succeeds.
+          // the current binding; clear them and fail closed until a later
+          // check succeeds.
+          clearAllViews();
+          setBinding(null);
           setValidationFailed(true);
           setVerifying(false);
         });
@@ -809,6 +826,7 @@ globalThis.__ModuleLoader__.load({
             if (result.stale === true || result.cancelled === true) return;
             const view = failureState(result);
             if (view.state !== "ok") { fail(view, "detailMore"); return; }
+            if (!acceptRead("detail", result.data)) return;
             succeed("detailMore");
             setDetail((current) => current === null || current.oid !== oid ? current : ({
               ...current,
