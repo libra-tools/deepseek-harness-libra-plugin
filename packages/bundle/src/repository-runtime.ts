@@ -95,6 +95,9 @@ export async function applyPerSession(
   const pendingOperations = new Set<Promise<unknown>>();
   const sessionTails = new Map<string, Promise<void>>();
   const disposedSessions = new Set<string>();
+  const pendingEvents = new Map<string, Array<{ session: Session; event: BufferedSessionEvent }>>();
+  const MAX_BUFFERED_EVENTS = 256;
+  const bufferWarned = new Set<string>();
   const sessionSerial = async <T>(sessionId: string, work: () => Promise<T>): Promise<T> => {
     const previous = sessionTails.get(sessionId) ?? Promise.resolve();
     let unlock!: () => void;
@@ -354,6 +357,7 @@ export async function applyPerSession(
       runtime.sessions.add(sessionId);
       runtime.memory?.track(session);
       await runtime.workspace.claim(session);
+      flushBufferedEvents(sessionId, runtime);
       if (disposedSessions.has(sessionId)) {
         // The Session was disposed while its first bind was in flight; release
         // it now instead of keeping a bridge reference until unload.
@@ -430,9 +434,9 @@ export async function applyPerSession(
 
   const bindingService: LibraRepositoryBindingService = {
     rebind: async (value) => {
-      if (disposed) {
-        const sessionId = typeof value === "object" && value !== null && "id" in value ? String(value.id) : "";
-        return { ok: false, failure: { kind: "bridge_unavailable", sessionId, cwd: "" } };
+      const earlyId = typeof value === "object" && value !== null && "id" in value ? String(value.id) : "";
+      if (disposed || disposedSessions.has(earlyId)) {
+        return { ok: false, failure: { kind: "bridge_unavailable", sessionId: earlyId, cwd: "" } };
       }
       const target = value as Session;
       const work = (async () => sessionSerial(String(target.id), () => rebindNow(value)))();
@@ -478,6 +482,14 @@ export async function applyPerSession(
         runtime.sessions.add(sessionId);
         runtime.memory?.track(session);
         await runtime.workspace.claim(session);
+        flushBufferedEvents(sessionId, runtime);
+        if (disposedSessions.has(sessionId)) {
+          await retireSession(runtime, session);
+          await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
+          const failure: BindingFailure = { kind: "bridge_unavailable", sessionId, cwd };
+          reportFailure(failure);
+          return { ok: false, failure };
+        }
         return result;
       } catch {
         await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
@@ -488,6 +500,43 @@ export async function applyPerSession(
     }
   }
   hostDisposers.push(ctx.reflect.provide("libraRepositoryBinding", bindingService));
+
+  interface BufferedSessionEvent { seq: number; type: string; data: unknown }
+
+  /**
+   * Binding and runtime activation cross an asynchronous bridge handshake, so
+   * events committed in that window would otherwise reach no outbox. Buffer
+   * them per session and drain them into the binding once it is mounted.
+   */
+  const disposeEventBuffer = ctx.on("session/event", (session: Session, event: BufferedSessionEvent) => {
+    const sessionId = String(session.id);
+    const bound = registry.sessionBinding(sessionId);
+    const runtime = bound === undefined ? undefined : runtimes.get(bound.key);
+    if (runtime !== undefined && runtime.sessions.has(sessionId)) return;
+    if (disposedSessions.has(sessionId)) return;
+    const buffered = pendingEvents.get(sessionId) ?? [];
+    if (buffered.length >= MAX_BUFFERED_EVENTS) {
+      if (!bufferWarned.has(sessionId)) {
+        bufferWarned.add(sessionId);
+        ctx.logger.warn(`libra: dropped session events beyond ${MAX_BUFFERED_EVENTS} while binding session ${sessionId}`);
+      }
+      return;
+    }
+    buffered.push({ session, event });
+    pendingEvents.set(sessionId, buffered);
+  });
+
+  const flushBufferedEvents = (sessionId: string, runtime: PerRepositoryRuntime): void => {
+    const buffered = pendingEvents.get(sessionId);
+    if (buffered === undefined) return;
+    pendingEvents.delete(sessionId);
+    bufferWarned.delete(sessionId);
+    for (const item of buffered) {
+      if (disposedSessions.has(sessionId)) return;
+      if (!sessionServedBy(runtime.binding.key)(item.session)) continue;
+      runtime.outbox.capture(item.session, item.event);
+    }
+  };
 
   const disposeCreated = ctx.on("session/created", (session: Session) => trackBind(session));
   const disposeLifecycle = ctx.on("session/disposed", async (session: Session) => {
@@ -501,6 +550,8 @@ export async function applyPerSession(
         await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
       }
       bindingFailures.delete(sessionId);
+      pendingEvents.delete(sessionId);
+      bufferWarned.delete(sessionId);
     });
   });
   const disposePreStep = ctx.on("agent/pre-step", async ({ agent }, next) => {
@@ -516,6 +567,7 @@ export async function applyPerSession(
     disposeCreated();
     disposePreStep();
     disposeLifecycle();
+    disposeEventBuffer();
     disposeTools();
     await Promise.allSettled([...pendingBinds, ...pendingOperations, ...starting.values()]);
     await Promise.allSettled([...runtimes.values()].map((runtime) => runtime.dispose()));

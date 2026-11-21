@@ -79,6 +79,7 @@ class FakeClient {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.connected = false;
   }
 }
 
@@ -285,6 +286,23 @@ describe("repository binding", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.failure.kind).toBe("bridge_unavailable");
+  });
+
+  it("replaces a crashed bridge instead of serving stale evidence", async () => {
+    const root = await fixture("crashed");
+    const identities = new Map([[root, identity(root)]]);
+    const { registry: instance } = registry(identities);
+    const first = bindingOf(await instance.bind("s-1", root));
+    expect(first.evidence.childPid).toBe(1000);
+
+    // The child exits without the registry being told.
+    (first.client as unknown as { connected: boolean }).connected = false;
+    expect(instance.sessionBinding("s-1")).toBeUndefined();
+
+    const second = bindingOf(await instance.bind("s-1", root));
+    expect(second.client).not.toBe(first.client);
+    expect(second.evidence.childPid).not.toBe(1000);
+    expect(second.identity.worktreeId).toBe(first.identity.worktreeId);
   });
 
   it("keeps reported evidence immutable", async () => {

@@ -178,6 +178,12 @@ export class BridgeClient {
     }
   }
 
+  /** Whether this client currently holds a live, handshaken child. */
+  get connected(): boolean {
+    const state = this.state;
+    return state !== null && !state.disposed;
+  }
+
   /** OS process id of the running bridge child, for Host diagnostics. */
   get childPid(): number | undefined {
     const pid = this.state?.child.pid;

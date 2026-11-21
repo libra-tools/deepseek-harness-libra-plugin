@@ -183,10 +183,12 @@ export class RepositoryRegistry {
     return [...this.bindings.values()];
   }
 
-  /** The binding a session currently holds, if any. */
+  /** The binding a session currently holds, if its bridge is still alive. */
   sessionBinding(sessionId: string): RepositoryBinding | undefined {
     const bound = this.sessions.get(sessionId);
-    return bound === undefined ? undefined : this.bindings.get(bound.key);
+    if (bound === undefined) return undefined;
+    const binding = this.bindings.get(bound.key);
+    return binding !== undefined && binding.client.connected ? binding : undefined;
   }
 
   /** The session's own canonical directory inside its bound worktree. */
@@ -234,7 +236,14 @@ export class RepositoryRegistry {
     const existing = this.sessions.get(sessionId);
     if (existing !== undefined && existing.cwd === cwd) {
       const binding = this.bindings.get(existing.key);
-      if (binding !== undefined) return { ok: true, binding };
+      if (binding !== undefined) {
+        // A crashed child is not a usable binding; drop it and re-identify so
+        // the caller gets a live bridge and fresh evidence.
+        if (binding.client.connected) return { ok: true, binding };
+        this.bindings.delete(binding.key);
+        await binding.client.close().catch(() => undefined);
+      }
+      this.sessions.delete(sessionId);
     }
     const probe = await this.identify(sessionId, cwd);
     if (!probe.ok) return probe;

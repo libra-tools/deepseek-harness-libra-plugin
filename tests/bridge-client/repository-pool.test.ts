@@ -409,6 +409,22 @@ describe("Host session-to-repository pool", () => {
     expect(harness.evidence().failure("s-1")?.kind).toBe("no_working_directory");
   }, 60_000);
 
+  it("persists an event committed before the session finished binding", async () => {
+    const shared = fixtureRoot("early-event");
+    roots = [shared];
+    const harness = await start(new Map([["s-1", shared]]));
+    const one = session("s-1");
+
+    // The event is committed while the bridge handshake is still in flight, so
+    // no runtime is mounted to capture it yet.
+    await harness.capture(one, 0);
+    expect(totalQueuedFiles()).toBe(0);
+
+    await harness.emit("session/created", one);
+    expect(harness.evidence().bindings()).toHaveLength(1);
+    expect(queuedFiles(namespaces()[0]!)).toHaveLength(1);
+  }, 60_000);
+
   it("keeps a bound session available after its first event", async () => {
     const root = fixtureRoot("steady");
     roots = [root];
