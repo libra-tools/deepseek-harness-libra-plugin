@@ -38,6 +38,8 @@ export type SessionEvidence = {
     readonly unborn: boolean;
   };
   readonly bindingKey: string;
+  /** Binding generation; distinguishes a replacement bridge on the same worktree. */
+  readonly generation: number;
   readonly sessionCount: number;
   readonly evidence: BridgeEvidenceInfo;
 };

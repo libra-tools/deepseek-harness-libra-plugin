@@ -553,7 +553,7 @@ globalThis.__ModuleLoader__.load({
             const view = failureState(result);
             if (view.state !== "ok") { fail(view, "status"); return; }
             succeed("status");
-            noteReadBinding(result.data);
+            if (!acceptRead("status", result.data)) return;
             setStatus((current) => ({
               entries: cursor === null ? result.data.entries : current.entries.concat(result.data.entries),
               next: result.data.cursor.next,
@@ -569,7 +569,7 @@ globalThis.__ModuleLoader__.load({
             const view = failureState(result);
             if (view.state !== "ok") { fail(view, "history"); return; }
             succeed("history");
-            noteReadBinding(result.data);
+            if (!acceptRead("history", result.data)) return;
             setHistory((current) => ({
               ...mergeHistory(cursor === null ? { commits: [], next: null } : current, result.data),
               loading: false,
@@ -579,11 +579,45 @@ globalThis.__ModuleLoader__.load({
 
       const diagnosticsGeneration = React.useRef(0);
       const bindingState = React.useRef({ key: null, generation: null, ok: false, initialized: false });
-      const lastReadBinding = React.useRef(null);
+      const readIdentities = React.useRef(new Map());
       const lastEvidenceBinding = React.useRef(null);
-      const noteReadBinding = (data) => {
-        if (data === null || data === undefined || data.bindingKey === undefined) return;
-        lastReadBinding.current = { key: data.bindingKey, generation: data.bindingGeneration };
+      const evidenceReloadedFor = React.useRef(null);
+      const staleReloaded = React.useRef(new Set());
+      const sameIdentity = (left, right) => left !== null && right !== null
+        && left.key === right.key && left.generation === right.generation;
+      const clearChannel = (channel) => {
+        if (channel === "status") setStatus({ entries: [], next: null });
+        else if (channel === "history") setHistory({ commits: [], next: null, loading: false });
+        else if (channel === "diff") { setSelected(null); setDiff(null); }
+        else if (channel === "detail") setDetail(null);
+        else if (channel === "diagnostics") setDiagnostics({ available: false });
+      };
+      const markStale = (channel) => {
+        clearChannel(channel);
+        setErrors((current) => ({ ...current, [channel]: "panelMoved" }));
+      };
+      // Accept a read only for the binding the panel has validated. A result
+      // that belongs to another binding is dropped per channel (never a full
+      // refresh, which could re-enter with stale reads again).
+      const acceptRead = (channel, data) => {
+        if (data === null || data === undefined || data.bindingKey === undefined) return true;
+        const identity = { key: data.bindingKey, generation: data.bindingGeneration };
+        readIdentities.current.set(channel, identity);
+        const current = bindingState.current;
+        if (current.initialized && current.ok === true
+          && !sameIdentity(identity, { key: current.key, generation: current.generation })) {
+          markStale(channel);
+          // Reload this channel once for a foreign identity; a Host that keeps
+          // answering stale must not spin the panel.
+          const marker = `${channel}:${identity.key}:${identity.generation}`;
+          if (!staleReloaded.current.has(marker)) {
+            staleReloaded.current.add(marker);
+            if (channel === "status") loadStatus(null);
+            else if (channel === "history") loadHistory(null);
+          }
+          return false;
+        }
+        return true;
       };
       const checkSequence = React.useRef(0);
       const checkBinding = () => {
@@ -612,16 +646,26 @@ globalThis.__ModuleLoader__.load({
             initialized: true,
           };
           // The mount's own reads may already belong to a binding the Session
-          // left before this first check completed; only reuse them when they
-          // prove the same identity. Later changes always reload.
+          // left before this first check completed. Later changes reload; the
+          // first check drops only the channels whose reads prove another
+          // binding and reloads those channels.
           if (previous.initialized && changed) {
             refresh();
           } else if (!previous.initialized) {
-            const read = lastReadBinding.current;
-            const evidenceRead = lastEvidenceBinding.current;
-            const staleRead = read !== null && (read.key !== result.bindingKey || read.generation !== result.generation);
-            const staleEvidence = evidenceRead !== null && evidenceRead !== result.bindingKey;
-            if (staleRead || staleEvidence) refresh();
+            const identity = { key: result.bindingKey, generation: result.generation };
+            for (const [channel, read] of readIdentities.current.entries()) {
+              if (!sameIdentity(read, identity)) markStale(channel);
+            }
+            if (lastEvidenceBinding.current !== null && !sameIdentity(lastEvidenceBinding.current, identity)) {
+              markStale("diagnostics");
+            }
+            const errorsToReload = ["status", "history"].filter((channel) =>
+              readIdentities.current.has(channel) && !sameIdentity(readIdentities.current.get(channel), identity));
+            if (errorsToReload.includes("status")) loadStatus(null);
+            if (errorsToReload.includes("history")) loadHistory(null);
+            if (lastEvidenceBinding.current !== null && !sameIdentity(lastEvidenceBinding.current, identity)) {
+              loadDiagnostics(true);
+            }
           }
         })
         .catch(() => {
@@ -641,8 +685,27 @@ globalThis.__ModuleLoader__.load({
           .then(() => evidenceClient.session())
           .then((result) => {
             if (diagnosticsGeneration.current !== mine) return;
-            if (result !== null && result !== undefined && result.ok === true) {
-              lastEvidenceBinding.current = result.data.bindingKey ?? null;
+            const evidenceIdentity = result !== null && result !== undefined && result.ok === true
+              && result.data.bindingKey !== undefined
+              ? { key: result.data.bindingKey, generation: result.data.generation ?? 0 }
+              : null;
+            if (evidenceIdentity !== null) {
+              const current = bindingState.current;
+              if (current.initialized && current.ok === true
+                && !sameIdentity(evidenceIdentity, { key: current.key, generation: current.generation })) {
+                lastEvidenceBinding.current = evidenceIdentity;
+                markStale("diagnostics");
+                // Reload once per foreign identity; a Host that keeps answering
+                // stale must not spin the panel.
+                if (!sameIdentity(evidenceReloadedFor.current, evidenceIdentity)) {
+                  evidenceReloadedFor.current = evidenceIdentity;
+                  loadDiagnostics(true);
+                }
+                return;
+              }
+              lastEvidenceBinding.current = evidenceIdentity;
+            } else {
+              lastEvidenceBinding.current = null;
             }
             setDiagnostics(describeEvidence(result));
           })
@@ -656,6 +719,10 @@ globalThis.__ModuleLoader__.load({
         // A refresh is a new generation for every channel: late results from the
         // previous generation (including a pending commit detail) must not land.
         abortAll();
+        readIdentities.current.clear();
+        staleReloaded.current.clear();
+        lastEvidenceBinding.current = null;
+        evidenceReloadedFor.current = null;
         setDiff(null);
         setDetail(null);
         setSelected(null);
@@ -707,7 +774,7 @@ globalThis.__ModuleLoader__.load({
             const view = failureState(result);
             if (view.state !== "ok") { setDiff(null); fail(view, "diff"); return; }
             succeed("diff");
-            noteReadBinding(result.data);
+            if (!acceptRead("diff", result.data)) return;
             setDiff(result.data);
           });
       };
@@ -723,7 +790,7 @@ globalThis.__ModuleLoader__.load({
             const view = failureState(result);
             if (view.state !== "ok") { setDetail(null); fail(view, "detail"); return; }
             succeed("detail");
-            noteReadBinding(result.data);
+            if (!acceptRead("detail", result.data)) return;
             setDetail({
               oid: result.data.oid,
               summary: result.data.summary,

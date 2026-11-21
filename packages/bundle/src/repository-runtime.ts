@@ -665,6 +665,7 @@ export async function applyPerSession(
       data: {
         identity: { ...binding.identity },
         bindingKey: binding.key,
+        generation: registry.sessionGeneration(sessionId) ?? 0,
         sessionCount: binding.refs,
         evidence: {
           executable: binding.evidence.executable,

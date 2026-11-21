@@ -310,7 +310,7 @@ const evidenceOk = {
   ok: true,
   data: {
     identity: { worktreeId: "wt-1", branch: "main", headOid: null, unborn: true },
-    bindingKey: "key-1", sessionCount: 1,
+    bindingKey: "key-1", generation: 1, sessionCount: 1,
     evidence: {
       executable: "/opt/libra/bin/libra", executableSha256: "e".repeat(64), childPid: 42,
       initialize: { protocol: { major: 1, minor: 2 }, methods: ["vcs.status", "vcs.diff"], source: "deepseek-harness" },
@@ -1061,6 +1061,89 @@ describe("Libra panel component flows", () => {
     await panel.settle();
     expect(textOf(panel.tree)).toContain("binding-b.ts");
     expect(textOf(panel.tree)).not.toContain("binding-a.ts");
+    panel.unmount();
+  });
+
+  it("drops and reloads a mixed initial read from another binding", async () => {
+    const tracker = remoteHarness();
+    tracker.manualBinding();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+
+    tracker.take("status").resolve({
+      ok: true,
+      data: { entries: [{ path: "mixed-a.ts", state: "staged", oldPath: null }], cursor: { next: null }, bindingKey: "key-a", bindingGeneration: 1 },
+    });
+    tracker.take("log").resolve({
+      ok: true,
+      data: { commits: [{ oid: "b".repeat(40), summary: "mixed-b", authorTime: 1 }], cursor: { next: null }, bindingKey: "key-b", bindingGeneration: 2 },
+    });
+    await panel.settle();
+
+    tracker.resolveBinding({ ok: true, bindingKey: "key-b", generation: 2 });
+    tracker.resolveBinding({ ok: true, bindingKey: "key-b", generation: 2 });
+    await panel.settle();
+    await tick();
+    expect(textOf(panel.tree)).not.toContain("mixed-a.ts");
+    // The channel whose read proved another binding reloads exactly once.
+    expect(tracker.pendingCount("status")).toBe(1);
+    tracker.take("status").resolve({
+      ok: true,
+      data: { entries: [{ path: "mixed-b.ts", state: "staged", oldPath: null }], cursor: { next: null }, bindingKey: "key-b", bindingGeneration: 2 },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("mixed-b.ts");
+    expect(textOf(panel.tree)).not.toContain("mixed-a.ts");
+    panel.unmount();
+  });
+
+  it("drops and reloads a late read from the binding the Session left", async () => {
+    const tracker = remoteHarness();
+    tracker.manualBinding();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.resolveBinding({ ok: true, bindingKey: "key-b", generation: 2 });
+    tracker.resolveBinding({ ok: true, bindingKey: "key-b", generation: 2 });
+    await panel.settle();
+    await tick();
+
+    tracker.take("status").resolve({
+      ok: true,
+      data: { entries: [{ path: "late-a.ts", state: "staged", oldPath: null }], cursor: { next: null }, bindingKey: "key-a", bindingGeneration: 1 },
+    });
+    await panel.settle();
+    await tick();
+    expect(textOf(panel.tree)).not.toContain("late-a.ts");
+    expect(tracker.pendingCount("status")).toBe(1);
+    tracker.take("status").resolve({
+      ok: true,
+      data: { entries: [{ path: "late-b.ts", state: "staged", oldPath: null }], cursor: { next: null }, bindingKey: "key-b", bindingGeneration: 2 },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("late-b.ts");
+    panel.unmount();
+  });
+
+  it("drops evidence from an older generation of the same worktree", async () => {
+    const tracker = remoteHarness();
+    tracker.manualBinding();
+    const tabState = tabHarness();
+    const evidence = deferredEvidence();
+    const panel = await mountPanel(tracker, tabState, () => evidence.session());
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve(logPage("first"));
+    tracker.resolveBinding({ ok: true, bindingKey: "key-1", generation: 2 });
+    tracker.resolveBinding({ ok: true, bindingKey: "key-1", generation: 2 });
+    await panel.settle();
+
+    const show = button(panel.tree, "t:diagShow");
+    show!();
+    await panel.settle();
+    evidence.resolveNext({ ...evidenceOk, data: { ...evidenceOk.data, generation: 1 } });
+    await panel.settle();
+    await tick();
+    expect(textOf(panel.tree)).not.toContain("/opt/libra/bin/libra");
+    expect(evidence.pendingCount()).toBe(1);
     panel.unmount();
   });
 
