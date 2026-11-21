@@ -573,22 +573,30 @@ globalThis.__ModuleLoader__.load({
       };
 
       const diagnosticsGeneration = React.useRef(0);
-      const bindingKey = React.useRef(null);
+      const bindingState = React.useRef({ key: null, generation: null, ok: false, initialized: false });
       const checkBinding = () => Promise.resolve()
         .then(() => libra.binding())
         .then((result) => {
+          const previous = bindingState.current;
           if (result === undefined || result.ok !== true) {
-            if (bindingKey.current !== null) { bindingKey.current = null; refresh(); }
+            bindingState.current = { key: null, generation: null, ok: false, initialized: true };
+            // A binding that used to serve this tab stopped doing so: clear it.
+            if (previous.initialized && (previous.ok || previous.key !== null)) refresh();
             return;
           }
-          if (bindingKey.current !== null && bindingKey.current !== result.bindingKey) {
-            // The same Session was rebound while its tab stayed open: every
-            // row belongs to the previous repository and must go.
-            bindingKey.current = result.bindingKey;
-            refresh();
-            return;
-          }
-          bindingKey.current = result.bindingKey;
+          const changed = previous.ok !== true
+            || previous.key !== result.bindingKey
+            || previous.generation !== result.generation;
+          bindingState.current = {
+            key: result.bindingKey,
+            generation: result.generation,
+            ok: true,
+            initialized: true,
+          };
+          // First successful poll after mount needs no reload: the mount's own
+          // reads are already loading this exact binding. Later identity or
+          // generation changes (rebind, replacement bridge) require one.
+          if (previous.initialized && changed) refresh();
         })
         .catch(() => undefined);
 

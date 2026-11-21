@@ -773,6 +773,73 @@ describe("Libra panel component flows", () => {
     }
   });
 
+  it("recovers from an unbound banner when the Host later binds the Session", async () => {
+    const tracker = remoteHarness();
+    tracker.setBinding({ ok: false, error: { kind: "no_working_directory", message: "unbound" } });
+    const tabState = tabHarness();
+    const intervals: Array<() => void> = [];
+    const originalInterval = globalThis.setInterval;
+    const originalClear = globalThis.clearInterval;
+    globalThis.setInterval = ((callback: () => void) => { intervals.push(callback); return 1; }) as typeof setInterval;
+    globalThis.clearInterval = (() => undefined) as typeof clearInterval;
+    try {
+      const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+      tracker.take("status").resolve({ ok: false, error: { kind: "no_working_directory", message: "unbound" } });
+      tracker.take("log").resolve({ ok: false, error: { kind: "no_working_directory", message: "unbound" } });
+      await panel.settle();
+      expect(textOf(panel.tree)).toContain("t:panelUnbound");
+
+      // The Session becomes bound without any user action in the panel.
+      tracker.setBinding({ ok: true, bindingKey: "key-1", generation: 1 });
+      intervals[0]!();
+      await tick();
+      expect(tracker.pendingCount("status")).toBe(1);
+      expect(tracker.pendingCount("log")).toBe(1);
+      tracker.take("status").resolve(statusPage([{ path: "recovered.ts", state: "staged" }]));
+      tracker.take("log").resolve(logPage("recovered"));
+      await panel.settle();
+      expect(textOf(panel.tree)).not.toContain("t:panelUnbound");
+      expect(textOf(panel.tree)).toContain("recovered.ts");
+      panel.unmount();
+    } finally {
+      globalThis.setInterval = originalInterval;
+      globalThis.clearInterval = originalClear;
+    }
+  });
+
+  it("reloads when the same worktree gets a replacement bridge generation", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const intervals: Array<() => void> = [];
+    const originalInterval = globalThis.setInterval;
+    const originalClear = globalThis.clearInterval;
+    globalThis.setInterval = ((callback: () => void) => { intervals.push(callback); return 1; }) as typeof setInterval;
+    globalThis.clearInterval = (() => undefined) as typeof clearInterval;
+    try {
+      const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+      tracker.take("status").resolve(statusPage([{ path: "old-bridge.ts", state: "staged" }]));
+      tracker.take("log").resolve(logPage("old-bridge"));
+      await panel.settle();
+      expect(textOf(panel.tree)).toContain("old-bridge.ts");
+
+      // Same repository key, new generation: the child and its evidence changed.
+      tracker.setBinding({ ok: true, bindingKey: "key-1", generation: 2 });
+      intervals[0]!();
+      await tick();
+      expect(tracker.pendingCount("status")).toBe(1);
+      tracker.take("status").resolve(statusPage([{ path: "new-bridge.ts", state: "staged" }]));
+      tracker.take("log").resolve(logPage("new-bridge"));
+      await panel.settle();
+      expect(textOf(panel.tree)).toContain("new-bridge.ts");
+      expect(textOf(panel.tree)).not.toContain("old-bridge.ts");
+      expect(textOf(panel.tree)).not.toContain("aaaaaaaa old-bridge");
+      panel.unmount();
+    } finally {
+      globalThis.setInterval = originalInterval;
+      globalThis.clearInterval = originalClear;
+    }
+  });
+
   it("keeps two mounted Sessions isolated", async () => {
     const first = remoteHarness();
     const second = remoteHarness();
