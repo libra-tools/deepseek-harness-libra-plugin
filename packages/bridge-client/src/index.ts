@@ -27,6 +27,7 @@ export {
   VcsReadMethods,
 } from "./vcs-methods.js";
 export type {
+  VcsCommitFileState,
   VcsCommitSummary,
   VcsCursor,
   VcsDiffFile,
@@ -43,5 +44,6 @@ export type {
   VcsShowResult,
   VcsStatusEntry,
   VcsStatusParams,
+  VcsStatusState,
   VcsStatusResult,
 } from "./vcs-methods.js";

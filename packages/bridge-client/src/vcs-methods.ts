@@ -26,6 +26,10 @@ export type VcsReadFailureKind =
   | "cursor_invalid"
   | "scope_mismatch"
   | "stale_state"
+  | "conflict"
+  | "protocol_mismatch"
+  | "denied"
+  | "timeout"
   | "internal";
 
 export class VcsReadError extends Error {
@@ -51,9 +55,13 @@ export interface VcsStatusParams {
   limit?: number;
 }
 
+export type VcsStatusState = "staged" | "unstaged" | "untracked" | "rename" | "conflict";
+export type VcsCommitFileState = "staged" | "rename";
+
 export interface VcsStatusEntry {
   path: string;
-  state: string;
+  state: VcsStatusState;
+  oldPath: string | null;
 }
 
 export interface VcsStatusResult {
@@ -113,7 +121,7 @@ export interface VcsShowParams {
 
 export interface VcsShowFile {
   path: string;
-  state: string;
+  state: VcsCommitFileState;
   oldPath: string | null;
 }
 
@@ -158,36 +166,143 @@ function validateOid(oid: string | undefined): string {
   if (typeof oid !== "string" || oid.length === 0) {
     throw new VcsReadError("invalid_params", "oid is required");
   }
-  if (oid.includes("..") || oid.includes(":") || oid.includes(" ") || oid.startsWith("-")) {
-    throw new VcsReadError("invalid_params", "oid must be one object id, not a revision range");
+  if (!/^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/.test(oid)) {
+    throw new VcsReadError("invalid_params", "oid must be one SHA-1 or SHA-256 object id");
   }
   return oid;
 }
 
-function stringList(value: unknown): string[] {
+function pathsOf(value: unknown): string[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
-    throw new VcsReadError("invalid_params", "paths must be a list of repository-relative strings");
+  if (!Array.isArray(value) || value.length > 64) {
+    throw new VcsReadError("invalid_params", "paths must be a list of at most 64 repository-relative strings");
   }
-  return value as string[];
+  const paths: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.length === 0 || Buffer.byteLength(entry, "utf8") > 4096
+      || entry.includes("\0") || entry.startsWith(":") || entry.startsWith("/")
+      || entry.startsWith("\\") || entry.includes(":") || entry.includes("\\")
+      || ["*", "?", "[", "]"].some((syntax) => entry.includes(syntax))
+      || entry.split("/").some((part) => part === ".." || part === "~")) {
+      throw new VcsReadError("invalid_params", "paths must be literal repository-relative paths without pathspec syntax");
+    }
+    const normalized = entry.split("/").filter((part) => part.length > 0 && part !== ".").join("/");
+    if (normalized.length === 0) throw new VcsReadError("invalid_params", "each path must name an entry inside the repository");
+    paths.push(normalized);
+  }
+  return paths;
 }
 
-function cursorOf(payload: Record<string, unknown>): VcsCursor {
-  const cursor = payload["cursor"];
-  if (!isRecord(cursor)) return { next: null };
-  const next = cursor["next"];
-  return { next: typeof next === "string" ? next : null };
+function malformed(method: VcsReadMethod, field: string): never {
+  throw new VcsReadError("internal", `the bridge returned malformed ${method} data (${field})`);
 }
+
+function stringField(payload: Record<string, unknown>, key: string, method: VcsReadMethod): string {
+  const value = payload[key];
+  return typeof value === "string" ? value : malformed(method, key);
+}
+
+function nullableStringField(payload: Record<string, unknown>, key: string, method: VcsReadMethod): string | null {
+  const value = payload[key];
+  return value === null || typeof value === "string" ? value : malformed(method, key);
+}
+
+function repositoryPath(value: string, method: VcsReadMethod, field: string): string {
+  if (value.length === 0 || Buffer.byteLength(value, "utf8") > 4096
+    || value.startsWith(":") || value.startsWith("/")
+    || value.includes("\0") || value.includes(":") || value.includes("\\")
+    || value.split("/").some((part) => part === ".." || part === "~")) {
+    return malformed(method, field);
+  }
+  const normalized = value.split("/").filter((part) => part.length > 0 && part !== ".").join("/");
+  return normalized.length > 0 ? normalized : malformed(method, field);
+}
+
+function pathField(payload: Record<string, unknown>, key: string, method: VcsReadMethod): string {
+  return repositoryPath(stringField(payload, key, method), method, key);
+}
+
+function nullablePathField(payload: Record<string, unknown>, key: string, method: VcsReadMethod): string | null {
+  const value = nullableStringField(payload, key, method);
+  return value === null ? null : repositoryPath(value, method, key);
+}
+
+function statusStateField(payload: Record<string, unknown>, key: string): VcsStatusState {
+  const state = payload[key];
+  if (state === "staged" || state === "unstaged" || state === "untracked" || state === "rename" || state === "conflict") {
+    return state;
+  }
+  return malformed("vcs.status", key);
+}
+
+function commitFileStateField(payload: Record<string, unknown>): VcsCommitFileState {
+  const state = payload["state"];
+  if (state === "staged" || state === "rename") return state;
+  return malformed("vcs.show", "files[].state");
+}
+
+function arrayField(payload: Record<string, unknown>, key: string, method: VcsReadMethod): unknown[] {
+  const value = payload[key];
+  return Array.isArray(value) ? value : malformed(method, key);
+}
+
+function cursorOf(payload: Record<string, unknown>, method: VcsReadMethod): VcsCursor {
+  const cursor = payload["cursor"];
+  if (!isRecord(cursor) || !("next" in cursor)) malformed(method, "cursor");
+  const next = cursor["next"];
+  if (next === null) return { next: null };
+  if (typeof next !== "string" || !/^\d+$/.test(next)) malformed(method, "cursor.next");
+  const offset = Number(next);
+  if (!Number.isSafeInteger(offset) || offset > MAX_CURSOR_OFFSET) malformed(method, "cursor.next");
+  return { next };
+}
+
+function truncationOf(value: unknown, method: VcsReadMethod, field: string): VcsDiffTruncation {
+  if (value === "none" || value === "binary" || value === "byte_cap" || value === "page_cap") return value;
+  return malformed(method, field);
+}
+
+/**
+ * Enforce the documented relationship between a file's patch and its truncation
+ * metadata, so an omitted or capped patch is never presented as complete.
+ */
+function consistentFileTruncation(file: {
+  patch: string | null;
+  truncated: boolean;
+  truncation: VcsDiffTruncation;
+}): boolean {
+  if (file.truncation === "none") return file.patch !== null && !file.truncated;
+  if (file.patch !== null) return false;
+  if (file.truncation === "binary") return file.truncated;
+  return file.truncated && (file.truncation === "byte_cap" || file.truncation === "page_cap");
+}
+
+/** Stable bridge codes the read surface can classify without reading messages. */
+const STABLE_CODE_KINDS: Record<string, VcsReadFailureKind> = {
+  "LBR-AGENT-026": "unsupported_capability",
+  "LBR-AGENT-027": "invalid_params",
+  "LBR-AGENT-030": "unsupported_capability",
+  "LBR-AGENT-031": "protocol_mismatch",
+  "LBR-AGENT-032": "scope_mismatch",
+  "LBR-AGENT-023": "scope_mismatch",
+  "LBR-AGENT-033": "conflict",
+  "LBR-AGENT-035": "denied",
+  "LBR-AGENT-036": "timeout",
+  "LBR-AGENT-037": "internal",
+  "LBR-AGENT-038": "stale_state",
+};
 
 function failureKind(error: JsonRpcErrorObject): VcsReadFailureKind {
-  const message = error.message.toLowerCase();
-  if (error.data?.stable_code === "LBR-AGENT-031") return "disconnected";
-  if (message.includes("cursor")) return "cursor_invalid";
-  if (message.includes("scope") || message.includes("repository")) return "scope_mismatch";
-  if (message.includes("stale")) return "stale_state";
-  if (message.includes("invalid") || message.includes("must be") || message.includes("refuses")) {
-    return "invalid_params";
+  const stable = error.data?.stable_code;
+  const known = stable === undefined ? undefined : STABLE_CODE_KINDS[stable];
+  // invalid_params is the one shared code whose message decides the class:
+  // Libra reports both a bad cursor and other bad parameters under it.
+  if (known === "invalid_params" && error.message.toLowerCase().includes("cursor")) {
+    return "cursor_invalid";
   }
+  if (known !== undefined) return known;
+  const message = error.message.toLowerCase();
+  if (message.includes("cursor")) return "cursor_invalid";
   return "internal";
 }
 
@@ -221,41 +336,70 @@ export class VcsReadMethods {
       cursor: validateCursor(params.cursor),
       ...(validateLimit(params.limit) !== undefined ? { limit: params.limit } : {}),
     });
-    const entries = Array.isArray(payload["entries"]) ? payload["entries"] : [];
-    return {
-      entries: entries.filter(isRecord).map((entry: Record<string, unknown>) => ({
-        path: String(entry["path"] ?? ""),
-        state: String(entry["state"] ?? ""),
-      })),
-      cursor: cursorOf(payload),
-    };
+    const entries = arrayField(payload, "entries", "vcs.status").map((entry) => {
+      if (!isRecord(entry)) malformed("vcs.status", "entries[]");
+      return {
+        path: pathField(entry, "path", "vcs.status"),
+        state: statusStateField(entry, "state"),
+        oldPath: nullablePathField(entry, "oldPath", "vcs.status"),
+      };
+    });
+    return { entries, cursor: cursorOf(payload, "vcs.status") };
   }
 
   async diff(params: VcsDiffParams): Promise<VcsDiffResult> {
     if (!DIFF_SIDES.includes(params.sides)) {
       throw new VcsReadError("invalid_params", `sides must be one of ${DIFF_SIDES.join(", ")}`);
     }
+    if (params.sides === "worktree-vs-oid" && params.oid === undefined) {
+      throw new VcsReadError("invalid_params", "oid is required for worktree-vs-oid");
+    }
+    if (params.sides !== "worktree-vs-oid" && params.oid !== undefined) {
+      throw new VcsReadError("invalid_params", "oid is only valid for worktree-vs-oid");
+    }
     const oid = params.sides === "worktree-vs-oid" ? validateOid(params.oid) : undefined;
+    const paths = pathsOf(params.paths);
+    const limit = validateLimit(params.limit);
     const payload = await this.call("vcs.diff", {
       sides: params.sides,
       ...(oid !== undefined ? { oid } : {}),
-      paths: stringList(params.paths),
-      ...(validateLimit(params.limit) !== undefined ? { limit: params.limit } : {}),
+      paths,
+      ...(limit !== undefined ? { limit } : {}),
     });
-    const files = Array.isArray(payload["files"]) ? payload["files"] : [];
-    return {
-      sides: params.sides,
-      byteCap: typeof payload["byteCap"] === "number" ? payload["byteCap"] as number : 0,
-      truncated: payload["truncated"] === true,
-      truncation: String(payload["truncation"] ?? "none") as VcsDiffTruncation,
-      files: files.filter(isRecord).map((file: Record<string, unknown>) => ({
-        path: String(file["path"] ?? ""),
-        oldPath: typeof file["oldPath"] === "string" ? file["oldPath"] : null,
-        patch: typeof file["patch"] === "string" ? file["patch"] : null,
-        truncated: file["truncated"] === true,
-        truncation: String(file["truncation"] ?? "none") as VcsDiffTruncation,
-      })),
-    };
+    if (stringField(payload, "sides", "vcs.diff") !== params.sides) malformed("vcs.diff", "sides");
+    const byteCap = payload["byteCap"];
+    const truncated = payload["truncated"];
+    if (typeof byteCap !== "number" || !Number.isSafeInteger(byteCap) || byteCap < 0) malformed("vcs.diff", "byteCap");
+    if (typeof truncated !== "boolean") malformed("vcs.diff", "truncated");
+    const truncation = truncationOf(payload["truncation"], "vcs.diff", "truncation");
+    const files = arrayField(payload, "files", "vcs.diff").map((file) => {
+      if (!isRecord(file)) malformed("vcs.diff", "files[]");
+      const fileTruncated = file["truncated"];
+      if (typeof fileTruncated !== "boolean") malformed("vcs.diff", "files[].truncated");
+      const patch = file["patch"];
+      if (patch !== null && typeof patch !== "string") malformed("vcs.diff", "files[].patch");
+      const fileTruncation = truncationOf(file["truncation"], "vcs.diff", "files[].truncation");
+      const entry = {
+        path: pathField(file, "path", "vcs.diff"),
+        oldPath: nullablePathField(file, "oldPath", "vcs.diff"),
+        patch,
+        truncated: fileTruncated,
+        truncation: fileTruncation,
+      };
+      if (!consistentFileTruncation(entry)) malformed("vcs.diff", "files[] metadata");
+      return entry;
+    });
+    // The aggregate flag must describe the aggregate of the file metadata.
+    if (truncated !== files.some((file) => file.truncated)) malformed("vcs.diff", "truncated");
+    if (truncation === "none") {
+      if (files.some((file) => file.truncation !== "none")) malformed("vcs.diff", "truncation");
+    } else if (truncation === "binary") {
+      // A binary aggregate needs a binary file that is marked truncated.
+      if (!files.some((file) => file.truncation === "binary" && file.truncated)) malformed("vcs.diff", "truncation");
+    } else if (!truncated || files.every((file) => file.truncation === "none")) {
+      malformed("vcs.diff", "truncation");
+    }
+    return { sides: params.sides, byteCap, truncated, truncation, files };
   }
 
   async log(params: VcsLogParams = {}): Promise<VcsLogResult> {
@@ -263,15 +407,17 @@ export class VcsReadMethods {
       cursor: validateCursor(params.cursor),
       ...(validateLimit(params.limit) !== undefined ? { limit: params.limit } : {}),
     });
-    const commits = Array.isArray(payload["commits"]) ? payload["commits"] : [];
-    return {
-      commits: commits.filter(isRecord).map((commit: Record<string, unknown>) => ({
-        oid: String(commit["oid"] ?? ""),
-        summary: String(commit["summary"] ?? ""),
-        authorTime: typeof commit["authorTime"] === "number" ? commit["authorTime"] as number : 0,
-      })),
-      cursor: cursorOf(payload),
-    };
+    const commits = arrayField(payload, "commits", "vcs.log").map((commit) => {
+      if (!isRecord(commit)) malformed("vcs.log", "commits[]");
+      const authorTime = commit["authorTime"];
+      if (typeof authorTime !== "number" || !Number.isFinite(authorTime)) malformed("vcs.log", "commits[].authorTime");
+      return {
+        oid: stringField(commit, "oid", "vcs.log"),
+        summary: stringField(commit, "summary", "vcs.log"),
+        authorTime,
+      };
+    });
+    return { commits, cursor: cursorOf(payload, "vcs.log") };
   }
 
   async show(params: VcsShowParams): Promise<VcsShowResult> {
@@ -281,19 +427,23 @@ export class VcsReadMethods {
       cursor: validateCursor(params.cursor),
       ...(validateLimit(params.limit) !== undefined ? { limit: params.limit } : {}),
     });
-    const files = Array.isArray(payload["files"]) ? payload["files"] : [];
+    const returnedOid = stringField(payload, "oid", "vcs.show");
+    const parents = arrayField(payload, "parents", "vcs.show").map((parent) =>
+      typeof parent === "string" ? parent : malformed("vcs.show", "parents[]"));
+    const files = arrayField(payload, "files", "vcs.show").map((file) => {
+      if (!isRecord(file)) malformed("vcs.show", "files[]");
+      return {
+        path: pathField(file, "path", "vcs.show"),
+        state: commitFileStateField(file),
+        oldPath: nullablePathField(file, "oldPath", "vcs.show"),
+      };
+    });
     return {
-      oid: typeof payload["oid"] === "string" ? payload["oid"] as string : oid,
-      summary: String(payload["summary"] ?? ""),
-      parents: Array.isArray(payload["parents"])
-        ? payload["parents"].filter((parent): parent is string => typeof parent === "string")
-        : [],
-      files: files.filter(isRecord).map((file: Record<string, unknown>) => ({
-        path: String(file["path"] ?? ""),
-        state: String(file["state"] ?? ""),
-        oldPath: typeof file["oldPath"] === "string" ? file["oldPath"] : null,
-      })),
-      cursor: cursorOf(payload),
+      oid: returnedOid === oid ? returnedOid : malformed("vcs.show", "oid"),
+      summary: stringField(payload, "summary", "vcs.show"),
+      parents,
+      files,
+      cursor: cursorOf(payload, "vcs.show"),
     };
   }
 

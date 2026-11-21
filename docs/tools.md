@@ -8,7 +8,7 @@ See the [plugin overview](../README.md) and [profile setup](profile.md) for curr
 
 ## Typed VCS read tools (LVC-04)
 
-`libra_vcs_status`, `libra_vcs_diff`, `libra_vcs_log` and `libra_vcs_show` are read-risk tools over the additive `vcs.*` methods. They share their implementation with the Host `libraVcsRead` service, so the model and the panel cannot diverge.
+`libra_vcs_status`, `libra_vcs_diff`, `libra_vcs_log` and `libra_vcs_show` are read-risk tools over the additive `vcs.*` methods. They run through the Host `libraVcsRead` service, so the model and the panel cannot diverge. The Client reaches the same service through the `libraVcs` Remote namespace.
 
 | Tool | Method | Parameters (model-visible) | Result |
 | --- | --- | --- | --- |

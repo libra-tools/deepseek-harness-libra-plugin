@@ -23,6 +23,10 @@ const limits = {
 
 const methods = [
   "vcs.identity",
+  "vcs.status",
+  "vcs.diff",
+  "vcs.log",
+  "vcs.show",
   "initialize",
   "session.open",
   "event.append",
@@ -285,6 +289,50 @@ rl.on("line", (line) => {
       leasesByWorkspace.delete(lease.workspace_id);
     }
     writeResponse({ jsonrpc: "2.0", result: { ok: true }, id });
+    return;
+  }
+  if (frame.method === "vcs.status") {
+    writeResponse({
+      jsonrpc: "2.0",
+      result: { entries: [{ path: "src/a.ts", state: "staged", oldPath: null }], cursor: { next: null } },
+      id,
+    });
+    return;
+  }
+  if (frame.method === "vcs.diff") {
+    writeResponse({
+      jsonrpc: "2.0",
+      result: {
+        sides: frame.params?.sides ?? "worktree-vs-index",
+        byteCap: 262144,
+        truncated: false,
+        truncation: "none",
+        files: [{ path: "src/a.ts", oldPath: null, patch: "diff --git a/src/a.ts b/src/a.ts", truncated: false, truncation: "none" }],
+      },
+      id,
+    });
+    return;
+  }
+  if (frame.method === "vcs.log") {
+    writeResponse({
+      jsonrpc: "2.0",
+      result: { commits: [{ oid: "a".repeat(40), summary: "feat: fixture", authorTime: 1700000000 }], cursor: { next: null } },
+      id,
+    });
+    return;
+  }
+  if (frame.method === "vcs.show") {
+    writeResponse({
+      jsonrpc: "2.0",
+      result: {
+        oid: frame.params?.oid ?? "a".repeat(40),
+        summary: "feat: fixture",
+        parents: [],
+        files: [{ path: "src/a.ts", state: "staged", oldPath: null }],
+        cursor: { next: null },
+      },
+      id,
+    });
     return;
   }
   if (frame.method === "vcs.identity") {

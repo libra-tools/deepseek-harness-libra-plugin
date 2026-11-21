@@ -27,7 +27,12 @@ import type {
   ToolRunContext,
 } from "@deepseek-ai/dsh-tools";
 import type { ApprovalService } from "@deepseek-ai/dsh-user-approval";
-import { TOOL_CATALOG, ToolsFacade } from "@libra/dsh-tools";
+import {
+  TOOL_CATALOG,
+  ToolsFacade,
+  VCS_READ_PARAMETER_DESCRIPTIONS,
+  VCS_READ_TOOL_DESCRIPTIONS,
+} from "@libra/dsh-tools";
 import type { ToolDefinition, ToolInput, ToolResult } from "@libra/dsh-tools";
 
 /** Risks that must pass the DSH approval seam before reaching the bridge. */
@@ -57,6 +62,7 @@ const MAX_RENDER_BYTES = 20000;
 
 /** Curated model-facing descriptions for the catalog entries. */
 const TOOL_DESCRIPTIONS: Record<string, string> = {
+  ...VCS_READ_TOOL_DESCRIPTIONS,
   libra_context:
     "Query Libra context for the current session (bounded, redacted). Use this before deciding how to act in the repository.",
   libra_status: "Report the Libra agent bridge status and capability surface.",
@@ -72,6 +78,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
 
 /** Per-tool parameter descriptions (defaults to a neutral bridge hint). */
 const PARAMETER_DESCRIPTIONS: Record<string, string> = {
+  ...VCS_READ_PARAMETER_DESCRIPTIONS,
   "libra_vcs_status.cursor": "Opaque next cursor from the previous status page.",
   "libra_vcs_status.limit": "Status page size, 1-100.",
   "libra_vcs_diff.sides": "One selector: worktree-vs-index, index-vs-head, or worktree-vs-oid.",
@@ -115,9 +122,17 @@ function parameterSchema(def: ToolDefinition): ParameterSchemaSpec {
   for (const name of def.parameters) {
     if (RESERVED_PARAMETERS.has(name)) continue;
     const description = PARAMETER_DESCRIPTIONS[`${def.name}.${name}`]
+      ?? VCS_READ_PARAMETER_DESCRIPTIONS[name]
       ?? `Parameter for ${def.bridge_method}.`;
     const required = def.required_parameters.includes(name) ? { required: true as const } : {};
-    if (INTEGER_PARAMETERS.has(name)) {
+    if (name === "sides" && def.name === "libra_vcs_diff") {
+      properties[name] = {
+        type: "string",
+        enum: ["worktree-vs-index", "index-vs-head", "worktree-vs-oid"],
+        description,
+        ...required,
+      };
+    } else if (INTEGER_PARAMETERS.has(name)) {
       properties[name] = { type: "integer", description, ...required };
     } else if (BOOLEAN_PARAMETERS.has(name)) {
       properties[name] = { type: "boolean", description, ...required };
@@ -130,23 +145,69 @@ function parameterSchema(def: ToolDefinition): ParameterSchemaSpec {
   return properties as ParameterSchemaSpec;
 }
 
-function renderValue(value: unknown): string {
-  let text: string;
-  if (typeof value === "string") {
-    text = value;
-  } else if (value === null || value === undefined) {
-    text = String(value);
-  } else {
+function serializedBytes(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value, null, 2), "utf8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/**
+ * Bound one tool result for the model without ever cutting JSON in half and
+ * without hiding that something was dropped. A diff keeps its structure and
+ * file metadata; only patch text is replaced, and the result says so.
+ */
+export function boundModelValue(value: unknown): string {
+  if (typeof value === "string" && Buffer.byteLength(value, "utf8") <= MAX_RENDER_BYTES) return value;
+  if (value === null || value === undefined) return String(value);
+
+  if (serializedBytes(value) <= MAX_RENDER_BYTES) {
     try {
-      text = JSON.stringify(value, null, 2);
+      return JSON.stringify(value, null, 2);
     } catch {
-      text = String(value);
+      return String(value);
     }
   }
-  if (Buffer.byteLength(text, "utf8") > MAX_RENDER_BYTES) {
-    return `${text.slice(0, MAX_RENDER_BYTES)}\n… [truncated]`;
+
+  if (isRecord(value) && Array.isArray(value["files"])) {
+    const files = value["files"].map((file) => (isRecord(file)
+      ? { ...file, patch: null, truncated: file["truncated"] === true || typeof file["patch"] === "string", truncation: typeof file["patch"] === "string" && file["truncation"] === "none" ? "byte_cap" : file["truncation"] }
+      : file));
+    const bounded = {
+      ...value,
+      files,
+      truncated: true,
+      truncation: value["truncation"] === "none" || value["truncation"] === undefined ? "byte_cap" : value["truncation"],
+      modelTruncation: "patch_omitted",
+      modelByteLimit: MAX_RENDER_BYTES,
+    };
+    if (serializedBytes(bounded) <= MAX_RENDER_BYTES) {
+      try { return JSON.stringify(bounded, null, 2); } catch { /* fall through to the preview */ }
+    }
   }
-  return text;
+
+  let preview: string;
+  try {
+    preview = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  } catch {
+    preview = String(value);
+  }
+  // Keep the envelope itself inside the same byte budget, so the marker never
+  // pushes the rendered result past the limit it reports.
+  let budget = Math.max(256, MAX_RENDER_BYTES - 512);
+  for (;;) {
+    const head = Buffer.from(preview, "utf8").subarray(0, budget).toString("utf8");
+    const envelope = JSON.stringify({
+      truncated: true,
+      truncation: "model_output_cap",
+      modelByteLimit: MAX_RENDER_BYTES,
+      originalBytes: Buffer.byteLength(preview, "utf8"),
+      preview: head,
+    }, null, 2);
+    if (Buffer.byteLength(envelope, "utf8") <= MAX_RENDER_BYTES || budget <= 256) return envelope;
+    budget = Math.floor(budget / 2);
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -162,7 +223,19 @@ function bridgeError(result: ToolResult): Error {
   return error;
 }
 
-export type ToolsResolver = (session: Session | undefined) => Promise<ToolsFacade | undefined>;
+/**
+ * Structural tool surface the registration needs. The Host composes this from a
+ * per-binding facade and the typed VCS read service, so Agent calls and the
+ * panel share one operation.
+ */
+export interface ResolvedTools {
+  listTools(): ReturnType<ToolsFacade["listTools"]>;
+  getPolicy(): ReturnType<ToolsFacade["getPolicy"]>;
+  supports(method: string): boolean;
+  invoke(name: string, params: ToolInput & Record<string, unknown>): Promise<import("@libra/dsh-tools").ToolResult>;
+}
+
+export type ToolsResolver = (session: Session | undefined) => Promise<ResolvedTools | undefined>;
 
 /** Read-only view of the session's repository binding, for approval fencing. */
 export interface BindingScope {
@@ -185,7 +258,8 @@ async function invokeLibra(
   }
   // Typed reads must fail closed when the repository binding's bridge did not
   // negotiate the method, instead of surfacing a generic method-not-found.
-  if (def.risk === "read" && !tools.supports(def.bridge_method)) {
+  const typedVcsRead = def.name.startsWith("libra_vcs_") && def.bridge_method.startsWith("vcs.");
+  if (def.risk === "read" && !typedVcsRead && !tools.supports(def.bridge_method)) {
     throw new Error(`${def.name}: the bridge does not advertise ${def.bridge_method}`, {
       cause: { code: "unsupported_capability" },
     });
@@ -233,7 +307,7 @@ async function invokeLibra(
 }
 
 function renderOutput(_args: Record<string, JsonValue>, value: JsonValue): ContentBlock[] {
-  return [{ type: "text", text: renderValue(value) }];
+  return [{ type: "text", text: boundModelValue(value) }];
 }
 
 /** Map a catalog risk class to the UI card category for a tool call. */

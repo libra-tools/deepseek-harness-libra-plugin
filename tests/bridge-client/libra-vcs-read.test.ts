@@ -51,14 +51,17 @@ const success = (method: string, data: Record<string, unknown>): CompletedReques
 describe("typed VCS read methods", () => {
   it("pages status with a validated cursor and explicit next cursor", async () => {
     const { client, fake } = fakeBridge([...VCS_READ_METHODS], (method) => method === "vcs.status"
-      ? success(method, { entries: [{ path: "src/a.ts", state: "staged" }, { path: "b.md", state: "unstaged" }], cursor: { next: "40" } })
+      ? success(method, { entries: [{ path: "src/a.ts", state: "staged", oldPath: null }, { path: "b.md", state: "rename", oldPath: "old-b.md" }], cursor: { next: "40" } })
       : success(method, {}));
     const read = new VcsReadMethods(client);
 
     const page = await read.status({ cursor: "20", limit: 20 });
 
     expect(fake.requests).toEqual([{ method: "vcs.status", params: { cursor: "20", limit: 20 } }]);
-    expect(page.entries).toEqual([{ path: "src/a.ts", state: "staged" }, { path: "b.md", state: "unstaged" }]);
+    expect(page.entries).toEqual([
+      { path: "src/a.ts", state: "staged", oldPath: null },
+      { path: "b.md", state: "rename", oldPath: "old-b.md" },
+    ]);
     expect(page.cursor.next).toBe("40");
     expect(page.entries.some((entry) => entry.path.startsWith("/"))).toBe(false);
   });
@@ -84,6 +87,68 @@ describe("typed VCS read methods", () => {
       retryable: false,
     });
     expect(read.availableMethods()).toEqual(["vcs.status", "vcs.log"]);
+  });
+
+  it("rejects unrelated diff OIDs, malformed object ids and unsafe path selectors before a request", async () => {
+    const { client, fake } = fakeBridge();
+    const read = new VcsReadMethods(client);
+
+    await expect(read.diff({ sides: "worktree-vs-index", oid: "a".repeat(40) })).rejects.toMatchObject({ kind: "invalid_params" });
+    await expect(read.diff({ sides: "worktree-vs-oid", oid: "not-an-object-id" })).rejects.toMatchObject({ kind: "invalid_params" });
+    for (const path of ["/etc/passwd", "../secret", ":(exclude)*", "src/*.ts", "src\\\\x.ts", ""]) {
+      await expect(read.diff({ sides: "worktree-vs-index", paths: [path] })).rejects.toMatchObject({ kind: "invalid_params" });
+    }
+    await expect(read.diff({ sides: "worktree-vs-index", paths: Array.from({ length: 65 }, (_, index) => `p${index}`) }))
+      .rejects.toMatchObject({ kind: "invalid_params" });
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it("rejects a malformed successful bridge payload instead of presenting an empty repository", async () => {
+    const { client } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, {}));
+    await expect(new VcsReadMethods(client).status()).rejects.toMatchObject({ kind: "internal" });
+  });
+
+  it("refuses absolute or unknown status entries from a malformed bridge", async () => {
+    for (const entry of [
+      { path: "/etc/passwd", state: "staged", oldPath: null },
+      { path: "src/a.ts", state: "future-state", oldPath: null },
+    ]) {
+      const { client } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, {
+        entries: [entry], cursor: { next: null },
+      }));
+      await expect(new VcsReadMethods(client).status()).rejects.toMatchObject({ kind: "internal" });
+    }
+  });
+
+  it("rejects contradictory diff metadata instead of presenting an omitted patch as complete", async () => {
+    const cases: Array<Record<string, unknown>> = [
+      // A file claims complete while its patch is absent.
+      { sides: "worktree-vs-index", byteCap: 131072, truncated: false, truncation: "none",
+        files: [{ path: "a.ts", oldPath: null, patch: null, truncated: false, truncation: "none" }] },
+      // A file says it is complete while it carries truncation metadata.
+      { sides: "worktree-vs-index", byteCap: 131072, truncated: true, truncation: "byte_cap",
+        files: [{ path: "a.ts", oldPath: null, patch: null, truncated: false, truncation: "byte_cap" }] },
+      // The aggregate says untruncated while a file is binary.
+      { sides: "worktree-vs-index", byteCap: 131072, truncated: false, truncation: "none",
+        files: [{ path: "a.ts", oldPath: null, patch: null, truncated: true, truncation: "binary" }] },
+      // The aggregate claims a page cap while no file is truncated at all.
+      { sides: "worktree-vs-index", byteCap: 131072, truncated: true, truncation: "page_cap",
+        files: [{ path: "a.ts", oldPath: null, patch: "diff", truncated: false, truncation: "none" }] },
+      // A binary file must carry the truncated flag.
+      { sides: "worktree-vs-index", byteCap: 131072, truncated: true, truncation: "binary",
+        files: [{ path: "a.ts", oldPath: null, patch: null, truncated: false, truncation: "binary" }] },
+    ];
+    for (const data of cases) {
+      const { client } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, data));
+      await expect(new VcsReadMethods(client).diff({ sides: "worktree-vs-index" })).rejects.toMatchObject({ kind: "internal" });
+    }
+  });
+
+  it("rejects a diff whose response scope differs from the requested selector", async () => {
+    const { client } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, {
+      sides: "index-vs-head", byteCap: 131072, truncated: false, truncation: "none", files: [],
+    }));
+    await expect(new VcsReadMethods(client).diff({ sides: "worktree-vs-index" })).rejects.toMatchObject({ kind: "internal" });
   });
 
   it("reports a missing handshake as disconnected", async () => {
@@ -126,20 +191,31 @@ describe("typed VCS read methods", () => {
     expect(fake.requests).toHaveLength(0);
   });
 
-  it("maps bridge failures onto distinct kinds", async () => {
-    const failures: Array<[string, string]> = [
-      ["cursor must be an opaque decimal offset", "cursor_invalid", "cursor_invalid"],
-      ["scope mismatch: repository changed", "scope_mismatch", "scope_mismatch"],
-      ["the write fence is stale", "stale_state", "stale_state"],
-      ["limit must be a non-negative integer", "invalid_params", "invalid_params"],
-      ["boom", "internal", "internal"],
+  it("maps bridge failures onto distinct kinds from stable codes", async () => {
+    const failures: Array<[string | undefined, string, string]> = [
+      ["LBR-AGENT-027", "cursor must be an opaque decimal offset", "cursor_invalid"],
+      ["LBR-AGENT-027", "limit must be a non-negative integer", "invalid_params"],
+      ["LBR-AGENT-026", "unknown bridge method 'vcs.diff'", "unsupported_capability"],
+      ["LBR-AGENT-030", "allowlisted but not implemented", "unsupported_capability"],
+      ["LBR-AGENT-031", "bridge protocol major mismatch", "protocol_mismatch"],
+      ["LBR-AGENT-032", "scope conflict", "scope_mismatch"],
+      ["LBR-AGENT-033", "payload digest conflict", "conflict"],
+      ["LBR-AGENT-035", "operation denied", "denied"],
+      ["LBR-AGENT-036", "request deadline exceeded", "timeout"],
+      ["LBR-AGENT-037", "boom", "internal"],
+      ["LBR-AGENT-038", "the status fence is stale", "stale_state"],
+      [undefined, "boom", "internal"],
     ];
-    for (const [message, expected] of failures) {
+    for (const [stableCode, message, expected] of failures) {
       const { client } = fakeBridge([...VCS_READ_METHODS], (method) => ({
         id: 1,
         method,
         state: "error",
-        error: { code: 1000, message, data: { retryable: true } },
+        error: {
+          code: 1000,
+          message,
+          data: { retryable: true, ...(stableCode !== undefined ? { stable_code: stableCode } : {}) },
+        },
       }));
       await expect(new VcsReadMethods(client).status()).rejects.toMatchObject({ kind: expected, retryable: true });
     }
@@ -172,16 +248,16 @@ describe("typed VCS read methods", () => {
 describe("Host read service", () => {
   it("resolves the session binding and returns typed pages", async () => {
     const { client, fake } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, {
-      entries: [{ path: "a.ts", state: "staged" }], cursor: { next: "20" },
+      entries: [{ path: "a.ts", state: "staged", oldPath: null }], cursor: { next: "20" },
     }));
     const service = new LibraVcsReadService(async () => ({
       ok: true,
-      scope: { read: new VcsReadMethods(client), methods: [...VCS_READ_METHODS], bindingKey: "k1" },
+      scope: { read: new VcsReadMethods(client), methods: [...VCS_READ_METHODS], bindingKey: "k1", generation: 1, validate: async () => undefined },
     }));
 
     const page = await service.status({ id: "s-1" }, { limit: 20 });
 
-    expect(page.entries).toEqual([{ path: "a.ts", state: "staged" }]);
+    expect(page.entries).toEqual([{ path: "a.ts", state: "staged", oldPath: null }]);
     expect(fake.requests[0]?.method).toBe("vcs.status");
   });
 
@@ -198,7 +274,7 @@ describe("Host read service", () => {
     } as unknown as BridgeClient;
     const service = new LibraVcsReadService(async () => ({
       ok: true,
-      scope: { read: new VcsReadMethods(clientWithGate), methods: [...VCS_READ_METHODS], bindingKey: "k1" },
+      scope: { read: new VcsReadMethods(clientWithGate), methods: [...VCS_READ_METHODS], bindingKey: "k1", generation: 1, validate: async () => undefined },
     }));
     const first = service.log({ id: "s-1" });
     const second = service.log({ id: "s-1" });
@@ -206,6 +282,111 @@ describe("Host read service", () => {
     await first;
     await second;
     expect(fake.requests).toHaveLength(1);
+  });
+
+  it("cancels only one waiter when two callers share a read", async () => {
+    let release!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { client, fake } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, { commits: [], cursor: { next: null } }));
+    const gated = {
+      get negotiatedCapabilities() { return client.negotiatedCapabilities; },
+      async requestMethod(method: string, params: Record<string, unknown>) {
+        markStarted();
+        await gate;
+        return client.requestMethod(method, params);
+      },
+    } as unknown as BridgeClient;
+    const service = new LibraVcsReadService(async () => ({
+      ok: true,
+      scope: { read: new VcsReadMethods(gated), methods: [...VCS_READ_METHODS], bindingKey: "k1", generation: 1, validate: async () => undefined },
+    }));
+    const controller = new AbortController();
+    const cancelled = service.log({ id: "s-1" }, {}, { signal: controller.signal });
+    await started;
+    const surviving = service.log({ id: "s-1" });
+    controller.abort();
+
+    await expect(cancelled).rejects.toMatchObject({ kind: "cancelled" });
+    release();
+    await expect(surviving).resolves.toMatchObject({ commits: [], cursor: { next: null } });
+    expect(fake.requests).toHaveLength(1);
+  });
+
+  it("does not return an old repository result after a mid-read rebind", async () => {
+    let current = "repo-a";
+    let releaseA!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const gateA = new Promise<void>((resolve) => { releaseA = resolve; });
+    const { client: clientA, fake: fakeA } = fakeBridge([...VCS_READ_METHODS], (method) =>
+      success(method, { commits: [{ oid: "a".repeat(40), summary: "repo-a", authorTime: 1 }], cursor: { next: null } }));
+    const delayedA = {
+      get negotiatedCapabilities() { return clientA.negotiatedCapabilities; },
+      async requestMethod(method: string, params: Record<string, unknown>) {
+        markStarted();
+        await gateA;
+        return clientA.requestMethod(method, params);
+      },
+    } as unknown as BridgeClient;
+    const { client: clientB, fake: fakeB } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, {
+      commits: [{ oid: "b".repeat(40), summary: "repo-b", authorTime: 2 }], cursor: { next: null },
+    }));
+    const service = new LibraVcsReadService(async () => {
+      const repo = current;
+      const bridge = repo === "repo-a" ? delayedA : clientB;
+      const generation = repo === "repo-a" ? 1 : 2;
+      return {
+        ok: true as const,
+        scope: {
+          read: new VcsReadMethods(bridge),
+          methods: [...VCS_READ_METHODS],
+          bindingKey: repo,
+          generation,
+          validate: async () => {
+            if (current !== repo) throw new VcsHostError("cwd_changed", "the Session moved during the read");
+          },
+        },
+      };
+    });
+    const oldRead = service.log({ id: "s-1" });
+    await started;
+    current = "repo-b";
+    const newRead = service.log({ id: "s-1" });
+
+    await expect(newRead).resolves.toMatchObject({ commits: [{ summary: "repo-b" }] });
+    releaseA();
+    await expect(oldRead).rejects.toMatchObject({ kind: "cwd_changed" });
+    expect(fakeA.requests).toHaveLength(1);
+    expect(fakeB.requests).toHaveLength(1);
+  });
+
+  it("does not share a read between different refresh request ids", async () => {
+    let release!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { client, fake } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, { commits: [], cursor: { next: null } }));
+    const gated = {
+      get negotiatedCapabilities() { return client.negotiatedCapabilities; },
+      async requestMethod(method: string, params: Record<string, unknown>) {
+        markStarted();
+        await gate;
+        return client.requestMethod(method, params);
+      },
+    } as unknown as BridgeClient;
+    const service = new LibraVcsReadService(async () => ({
+      ok: true,
+      scope: { read: new VcsReadMethods(gated), methods: [...VCS_READ_METHODS], bindingKey: "k1", generation: 1, validate: async () => undefined },
+    }));
+    const first = service.log({ id: "s-1" }, {}, { requestId: "refresh-1" });
+    await started;
+    const second = service.log({ id: "s-1" }, {}, { requestId: "refresh-2" });
+    release();
+    await first;
+    await second;
+    expect(fake.requests).toHaveLength(2);
   });
 
   it("maps binding failures onto machine-distinguishable Host errors", async () => {
@@ -227,7 +408,7 @@ describe("Host read service", () => {
     const { client } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, { entries: [], cursor: { next: null } }));
     const service = new LibraVcsReadService(async () => ({
       ok: true,
-      scope: { read: new VcsReadMethods(client), methods: [...VCS_READ_METHODS], bindingKey: "k1" },
+      scope: { read: new VcsReadMethods(client), methods: [...VCS_READ_METHODS], bindingKey: "k1", generation: 1, validate: async () => undefined },
     }));
     const aborted = new AbortController();
     aborted.abort();
@@ -237,5 +418,34 @@ describe("Host read service", () => {
     const pending = service.status({ id: "s-1" }, {}, { signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toBeInstanceOf(VcsHostError);
+  });
+});
+
+describe("Remote namespace", () => {
+  it("declares four Session-scoped methods and returns typed results over the namespace", async () => {
+    const remoteModule = await import("../../packages/bundle/src/vcs-remote.js");
+    const { Context } = await import("@deepseek-ai/cordis");
+    const { remoteMethods } = await import("@deepseek-ai/dsh-typert-protocol");
+    const { client } = fakeBridge([...VCS_READ_METHODS], (method) => success(method, {
+      entries: [{ path: "a.ts", state: "staged", oldPath: null }], cursor: { next: null },
+    }));
+    const service = new LibraVcsReadService(async () => ({
+      ok: true,
+      scope: { read: new VcsReadMethods(client), methods: [...VCS_READ_METHODS], bindingKey: "k1", generation: 1, validate: async () => undefined },
+    }));
+    const remote = new remoteModule.LibraVcsRemote(new Context(), service, (id) =>
+      String(id) === "s-1" ? { id: "s-1" } as never : undefined);
+    const markers = remoteMethods(remote);
+    for (const method of ["status", "diff", "log", "show"]) {
+      expect(markers.find((marker) => marker.method === method)?.resources?.session).toBeDefined();
+    }
+    await expect(remote.status("s-1" as never)).resolves.toMatchObject({
+      ok: true,
+      data: { entries: [{ path: "a.ts", oldPath: null }] },
+    });
+    await expect(remote.status("missing" as never)).resolves.toMatchObject({
+      ok: false,
+      error: { kind: "no_working_directory" },
+    });
   });
 });

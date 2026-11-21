@@ -30,7 +30,10 @@ import {
 import { applyPerSession } from "./repository-runtime.js";
 import type { WorkingDirectoryService } from "./repository-binding.js";
 
+export { LibraVcsRemote, type SessionById } from "./vcs-remote.js";
+export { boundModelValue } from "./libra-tools.js";
 export {
+  invokeVcsReadTool,
   LibraVcsReadService,
   VcsHostError,
   type VcsHostFailureKind,

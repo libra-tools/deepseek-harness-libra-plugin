@@ -23,6 +23,7 @@ await build({
     "@deepseek-ai/dsh-tools",
     "@deepseek-ai/dsh-user-approval",
     "@deepseek-ai/dsh-session-projection",
+    "@deepseek-ai/dsh-typert-protocol",
     "@deepseek-ai/schemastery",
   ],
   sourcemap: true,

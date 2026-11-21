@@ -512,6 +512,21 @@ describe("Host session-to-repository pool", () => {
     expect(queuedFiles(namespaces()[0]!)).toHaveLength(1);
   }, 60_000);
 
+  it("runs a typed VCS read tool through the Host service", async () => {
+    const shared = fixtureRoot("vcs-tool");
+    roots = [shared];
+    const harness = await start(new Map([["s-1", shared]]));
+    const one = session("s-1");
+
+    await harness.emit("session/created", one);
+    const result = await harness.execute("libra_vcs_status", one) as { entries?: unknown } | undefined;
+
+    expect(result).toBeDefined();
+    // The typed read returns the service's structured page, not a raw bridge frame.
+    expect(JSON.stringify(result)).toContain("entries");
+    expect(harness.evidence().bindings()).toHaveLength(1);
+  }, 60_000);
+
   it("keeps a bound session available after its first event", async () => {
     const root = fixtureRoot("steady");
     roots = [root];

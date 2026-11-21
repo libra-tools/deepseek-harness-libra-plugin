@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import { VCS_READ_TOOLS, TOOL_CATALOG, ToolsFacade } from "@libra/dsh-tools";
+import { boundModelValue, invokeVcsReadTool, VcsHostError, type LibraVcsReadService } from "@libra/dsh-bundle";
 import { VCS_READ_METHODS, type BridgeClient, type CompletedRequest } from "@libra/dsh-bridge-client";
 
 const FORBIDDEN = [
@@ -91,5 +92,107 @@ describe("typed VCS read tools", () => {
     });
     expect(facade.supports("vcs.status")).toBe(true);
     expect(facade.supports("vcs.diff")).toBe(false);
+  });
+});
+
+describe("Agent VCS reads share the Host service", () => {
+  function service(error?: unknown) {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const make = (method: string) => async (_session: unknown, params: unknown) => {
+      calls.push({ method, params });
+      if (error !== undefined) throw error;
+      return { method, params } as never;
+    };
+    return {
+      calls,
+      service: {
+        status: make("status"),
+        diff: make("diff"),
+        log: make("log"),
+        show: make("show"),
+      } as unknown as LibraVcsReadService,
+    };
+  }
+
+  it("dispatches a tool call to the typed service with only declared parameters", async () => {
+    const { service: host, calls } = service();
+    const result = await invokeVcsReadTool(host, { id: "s-1" }, "libra_vcs_diff", {
+      sides: "worktree-vs-index",
+      paths: ["src"],
+      limit: 5,
+      operation_id: "op-1",
+    });
+    expect(result).toMatchObject({ status: "ok", operation_id: "op-1" });
+    expect(calls[0]).toEqual({ method: "diff", params: { sides: "worktree-vs-index", paths: ["src"], limit: 5 } });
+  });
+
+  it("rejects unexpected, forbidden and missing parameters without calling the service", async () => {
+    const { service: host, calls } = service();
+    for (const [tool, input, message] of [
+      ["libra_vcs_status", { repository_root: "/tmp/x" }, "unexpected tool parameter"],
+      ["libra_vcs_status", { cursor: null, path: "a" }, "unexpected tool parameter"],
+      ["libra_vcs_diff", { paths: ["a"] }, "requires parameter sides"],
+      ["libra_vcs_show", {}, "requires parameter oid"],
+    ] as const) {
+      const result = await invokeVcsReadTool(host, { id: "s-1" }, tool, input as Record<string, unknown>);
+      expect(result.status).toBe("error");
+      expect(result.error?.message).toContain(message);
+      expect(result.error?.stable_code).toBe("invalid_params");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("propagates the typed Host failure kinds as stable codes", async () => {
+    const { service: host } = service(new VcsHostError("cwd_changed", "moved"));
+    const result = await invokeVcsReadTool(host, { id: "s-1" }, "libra_vcs_status", {});
+    expect(result.status).toBe("error");
+    expect(result.error?.stable_code).toBe("cwd_changed");
+  });
+});
+
+describe("model-facing result bounds", () => {
+  it("keeps a small result intact", () => {
+    const text = boundModelValue({ entries: [{ path: "a.ts", state: "staged" }] });
+    expect(JSON.parse(text)).toEqual({ entries: [{ path: "a.ts", state: "staged" }] });
+  });
+
+  it("bounds a large diff by dropping patches and saying so", () => {
+    const patch = "x".repeat(30_000);
+    const value = {
+      sides: "worktree-vs-index",
+      byteCap: 262144,
+      truncated: false,
+      truncation: "none",
+      files: [
+        { path: "a.ts", oldPath: null, patch, truncated: false, truncation: "none" },
+        { path: "b.ts", oldPath: null, patch: "small", truncated: false, truncation: "none" },
+      ],
+    };
+    const text = boundModelValue(value);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(20_000);
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    expect(parsed["truncated"]).toBe(true);
+    expect(parsed["modelTruncation"]).toBe("patch_omitted");
+    const files = parsed["files"] as Array<Record<string, unknown>>;
+    expect(files[0]?.["patch"]).toBeNull();
+    expect(files[0]?.["truncated"]).toBe(true);
+    expect(files[0]?.["truncation"]).toBe("byte_cap");
+  });
+
+  it("bounds UTF-8 text without exceeding the byte cap", () => {
+    const text = boundModelValue("雪".repeat(10_000));
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(20_000);
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ truncated: true, truncation: "model_output_cap" });
+    expect(typeof parsed["preview"]).toBe("string");
+  });
+
+  it("falls back to an explicit preview envelope for a huge non-diff result", () => {
+    const text = boundModelValue({ rows: "y".repeat(50_000) });
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(20_000);
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ truncated: true, truncation: "model_output_cap" });
+    expect(typeof parsed["originalBytes"]).toBe("number");
+    expect(String(parsed["preview"]).length).toBeGreaterThan(0);
   });
 });
