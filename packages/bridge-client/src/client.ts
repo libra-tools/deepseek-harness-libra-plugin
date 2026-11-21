@@ -178,6 +178,12 @@ export class BridgeClient {
     }
   }
 
+  /** OS process id of the running bridge child, for Host diagnostics. */
+  get childPid(): number | undefined {
+    const pid = this.state?.child.pid;
+    return typeof pid === "number" ? pid : undefined;
+  }
+
   get negotiatedCapabilities(): InitializeResult | undefined {
     return this.state?.negotiated;
   }

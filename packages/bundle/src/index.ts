@@ -39,6 +39,17 @@ export const inject = ["agents", "sessions"];
  * `0` memory budget means Libra's own budget. Memory selection stays in Libra.
  */
 export type Config = DeploymentConfig;
+export {
+  type BindingFailure,
+  type BindResult,
+  type BridgeEvidence,
+  type RepositoryBinding,
+  type RepositoryIdentity,
+  RepositoryRegistry,
+  type RepositoryRegistryOptions,
+  type WorkingDirectoryService,
+  readSessionWorkingDirectory,
+} from "./repository-binding.js";
 
 export const Config = z.object({
   libraExecutable: z.string().default("").volatile(),
