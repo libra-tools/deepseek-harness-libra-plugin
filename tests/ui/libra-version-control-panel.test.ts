@@ -280,9 +280,12 @@ const logPage = (summary: string, next: string | null = null) => ({
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function deferredEvidence() {
-  let resolve!: (value: unknown) => void;
-  const promise = new Promise<unknown>((settle) => { resolve = settle; });
-  return { session: () => promise, resolve };
+  const pending: Array<(value: unknown) => void> = [];
+  return {
+    session: () => new Promise<unknown>((resolve) => { pending.push(resolve); }),
+    resolveNext: (value: unknown) => { pending.shift()!(value); },
+    pendingCount: () => pending.length,
+  };
 }
 
 const evidenceOk = {
@@ -566,15 +569,16 @@ describe("Libra panel component flows", () => {
     const panel = await mountPanel(tracker, tabState, () => evidence.session());
     tracker.take("status").resolve(statusPage([{ path: "a.ts", state: "unstaged" }], "2"));
     tracker.take("log").resolve(logPage("first"));
-    evidence.resolve(evidenceOk);
+    evidence.resolveNext(evidenceOk);
     await panel.settle();
 
     const show = button(panel.tree, "t:diagShow");
     show!();
     await panel.settle();
     expect(textOf(panel.tree)).toContain("/opt/libra/bin/libra");
+    // Expanding refreshes the record: one evidence read is in flight.
+    expect(evidence.pendingCount()).toBe(1);
 
-    // A later status page reports a moved Session: every channel is invalidated.
     const more = button(panel.tree, "t:statusMore");
     more!();
     await tick();
@@ -583,10 +587,19 @@ describe("Libra panel component flows", () => {
     expect(textOf(panel.tree)).toContain("t:panelMoved");
     expect(textOf(panel.tree)).not.toContain("/opt/libra/bin/libra");
 
-    // A late diagnostics answer cannot repopulate the panel.
-    evidence.resolve(evidenceOk);
+    // The pending read settles after the move; it cannot repopulate the panel.
+    evidence.resolveNext(evidenceOk);
     await panel.settle();
     expect(textOf(panel.tree)).not.toContain("/opt/libra/bin/libra");
+
+    // The diagnostics toggle is inert while the binding failure is sticky.
+    const hide = button(panel.tree, "t:diagHide");
+    hide!();
+    await panel.settle();
+    const reopen = button(panel.tree, "t:diagShow");
+    reopen!();
+    await tick();
+    expect(evidence.pendingCount()).toBe(0);
     panel.unmount();
   });
 

@@ -516,6 +516,7 @@ globalThis.__ModuleLoader__.load({
       const fail = (view, channel) => {
         if (BINDING_FAILURES.has(view.state)) {
           abortAll();
+          diagnosticsGeneration.current += 1;
           setBinding(view);
           setDiagnostics({ available: false });
           setStatus({ entries: [], next: null });
@@ -570,6 +571,7 @@ globalThis.__ModuleLoader__.load({
       const loadDiagnostics = () => {
         diagnosticsGeneration.current += 1;
         const mine = diagnosticsGeneration.current;
+        if (binding !== null) return Promise.resolve();
         return Promise.resolve()
           .then(() => evidenceClient.session())
           .then((result) => {
