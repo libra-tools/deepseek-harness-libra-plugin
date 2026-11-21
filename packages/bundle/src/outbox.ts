@@ -32,6 +32,11 @@ export interface OutboxMountOptions {
   outboxRoot?: string;
   /** Canonical repository path binds durable events to their destination. */
   repositoryRoot: string;
+  /**
+   * Which sessions this mount serves. One mount exists per bound repository,
+   * so a session bound elsewhere must not have its events captured here.
+   */
+  serves?: (session: Session) => boolean;
 }
 
 /**
@@ -57,6 +62,7 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
   const retiring = new Map<string, Promise<void>>();
   const disposers: Array<() => unknown> = [];
   const namespace = createHash("sha256").update(options.repositoryRoot).digest("hex");
+  const serves = options.serves ?? (() => true);
   const root = options.outboxRoot ?? defaultOutboxRoot();
   const namespaceRoot = join(root, namespace);
   const locks = new Map<string, GenerationClaim>();
@@ -183,6 +189,7 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
   // because an abandoned directory exists at plugin startup.
 
   disposers.push(ctx.on("session/event", (session, event) => {
+    if (!serves(session)) return;
     try {
 
       const header = session.header;
@@ -200,6 +207,7 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
     }
   }));
   disposers.push(ctx.on("session/flush", async (session) => {
+    if (!serves(session)) return;
     const state = projections.get(session);
     if (state === undefined) return;
     await retiring.get(String(session.id));
@@ -214,6 +222,7 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
     });
   }));
   disposers.push(ctx.on("session/disposed", (session) => {
+    if (!serves(session)) return;
     const state = ensureProjection(session);
     state.disposing = true;
     const previous = retiring.get(String(session.id));

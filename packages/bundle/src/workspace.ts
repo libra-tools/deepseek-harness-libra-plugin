@@ -16,6 +16,11 @@ const DEFAULT_LEASE_TTL_MS = 30_000;
 export interface WorkspaceMountOptions {
   /** Repository root claimed as the workspace path for every session. */
   repositoryRoot: string | (() => string);
+  /**
+   * Which sessions this mount serves. One mount exists per bound repository,
+   * so a session bound elsewhere must not claim a lease here.
+   */
+  serves?: (session: { id: unknown }) => boolean;
   /** Lease TTL in milliseconds, or a live settings read. */
   leaseTtlMs?: number | (() => number);
   /** Renew interval; defaults to half the lease TTL. */
@@ -66,7 +71,9 @@ export function mountLibraWorkspace(
     });
   };
 
+  const serves = options.serves ?? (() => true);
   disposers.push(ctx.on("session/created", (session) => {
+    if (!serves(session)) return;
     const sessionId = String(session.id);
     const parent = session.header?.parentSession;
     void binding.claim({
@@ -83,6 +90,7 @@ export function mountLibraWorkspace(
     });
   }));
   disposers.push(ctx.on("session/disposed", (session) => {
+    if (!serves(session)) return;
     release(String(session.id));
   }));
 
