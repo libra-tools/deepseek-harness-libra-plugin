@@ -373,6 +373,42 @@ describe("Host session-to-repository pool", () => {
     await expect(harness.execute("libra_status", one)).rejects.toThrow(/not bound to an available Libra repository/);
   }, 60_000);
 
+  it("stops serving when the Host starts reporting a relative directory", async () => {
+    const shared = fixtureRoot("relative-serving");
+    roots = [shared];
+    const directories = new Map([["s-1", shared]]);
+    const harness = await start(directories);
+    const one = session("s-1");
+
+    await harness.emit("session/created", one);
+    await harness.capture(one, 0);
+    const queuedBefore = totalQueuedFiles();
+
+    directories.set("s-1", ".");
+    await harness.emit("session/created", one);
+    expect(harness.evidence().failure("s-1")?.kind).toBe("not_a_repository");
+
+    await harness.capture(one, 1);
+    expect(totalQueuedFiles()).toBe(queuedBefore);
+  }, 60_000);
+
+  it("retires the old repository when a rebind has no Host directory", async () => {
+    const shared = fixtureRoot("rebind-no-dir");
+    roots = [shared];
+    const directories = new Map([["s-1", shared]]);
+    const harness = await start(directories);
+    const one = session("s-1");
+
+    await harness.emit("session/created", one);
+    await harness.capture(one, 0);
+
+    directories.delete("s-1");
+    const result = await harness.binding().rebind(one);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.kind).toBe("no_working_directory");
+    expect(harness.evidence().failure("s-1")?.kind).toBe("no_working_directory");
+  }, 60_000);
+
   it("keeps a bound session available after its first event", async () => {
     const root = fixtureRoot("steady");
     roots = [root];

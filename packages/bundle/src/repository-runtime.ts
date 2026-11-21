@@ -1,5 +1,6 @@
 /** Host-owned per-Session Libra bridge lifecycle (plan-20261118 LVC-03). */
 import { realpathSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { Context } from "@deepseek-ai/cordis";
@@ -18,6 +19,7 @@ import {
   RepositoryRegistry,
   readSessionWorkingDirectory,
   type BindingFailure,
+  type BindResult,
   type BridgeEvidenceSnapshot,
   type LibraBridgeEvidenceService,
   type LibraRepositoryBindingService,
@@ -90,6 +92,7 @@ export async function applyPerSession(
   const deployments = new WeakMap<BridgeClient, ResolvedDeployment>();
   const facades = new Map<string, ToolsFacade>();
   const pendingBinds = new Set<Promise<PerRepositoryRuntime | undefined>>();
+  const pendingOperations = new Set<Promise<unknown>>();
   const hostDisposers: Array<() => unknown> = [];
   let disposed = false;
   let warnedLegacyRoot = false;
@@ -116,6 +119,9 @@ export async function applyPerSession(
   const sessionOwnedBy = (key: string) => (session: Session): boolean =>
     registry.sessionBinding(String(session.id))?.key === key;
   const sameDirectory = (observed: string, bound: string): boolean => {
+    // The Host reports absolute paths; resolving a relative value here would
+    // compare it against the plugin process cwd.
+    if (!isAbsolute(observed) || !isAbsolute(bound)) return false;
     if (observed === bound) return true;
     try { return realpathSync(observed) === bound; } catch { return false; }
   };
@@ -404,6 +410,22 @@ export async function applyPerSession(
 
   const bindingService: LibraRepositoryBindingService = {
     rebind: async (value) => {
+      if (disposed) {
+        const sessionId = typeof value === "object" && value !== null && "id" in value ? String(value.id) : "";
+        return { ok: false, failure: { kind: "bridge_unavailable", sessionId, cwd: "" } };
+      }
+      const work = (async () => rebindNow(value))();
+      pendingOperations.add(work);
+      try {
+        return await work;
+      } finally {
+        pendingOperations.delete(work);
+      }
+    },
+  };
+
+  async function rebindNow(value: unknown): Promise<BindResult> {
+    {
       if (typeof value !== "object" || value === null || !("id" in value)) {
         return { ok: false, failure: { kind: "no_working_directory", sessionId: "" } };
       }
@@ -413,6 +435,7 @@ export async function applyPerSession(
       if (cwd === undefined) {
         const failure: BindingFailure = { kind: "no_working_directory", sessionId };
         reportFailure(failure);
+        await retireIfMoved(session, undefined);
         return { ok: false, failure };
       }
       const oldBinding = registry.sessionBinding(sessionId);
@@ -438,8 +461,8 @@ export async function applyPerSession(
         reportFailure(failure);
         return { ok: false, failure };
       }
-    },
-  };
+    }
+  }
   hostDisposers.push(ctx.reflect.provide("libraRepositoryBinding", bindingService));
 
   const disposeCreated = ctx.on("session/created", (session: Session) => trackBind(session));
@@ -456,7 +479,7 @@ export async function applyPerSession(
     disposeCreated();
     disposePreStep();
     disposeTools();
-    await Promise.allSettled([...pendingBinds, ...starting.values()]);
+    await Promise.allSettled([...pendingBinds, ...pendingOperations, ...starting.values()]);
     await Promise.allSettled([...runtimes.values()].map((runtime) => runtime.dispose()));
     runtimes.clear();
     facades.clear();
