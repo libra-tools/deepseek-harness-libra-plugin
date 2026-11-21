@@ -840,6 +840,34 @@ describe("Libra panel component flows", () => {
     }
   });
 
+  it("never flashes stale rows when a hidden tab returns after a rebind", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.take("status").resolve(statusPage([{ path: "hidden-old.ts", state: "staged" }]));
+    tracker.take("log").resolve(logPage("hidden-old"));
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("hidden-old.ts");
+
+    // The tab hides; while hidden the Session is rebound.
+    (tabState.tab.tab as { visible: boolean }).visible = false;
+    panel.render();
+    tracker.setBinding({ ok: true, bindingKey: "key-2", generation: 2 });
+    (tabState.tab.tab as { visible: boolean }).visible = true;
+    panel.render();
+    // Cached rows are suppressed until the binding is revalidated.
+    await panel.settle();
+    expect(textOf(panel.tree)).not.toContain("hidden-old.ts");
+    expect(textOf(panel.tree)).toContain("t:panelLoading");
+    expect(tracker.pendingCount("status")).toBe(1);
+    tracker.take("status").resolve(statusPage([{ path: "visible-new.ts", state: "staged" }]));
+    tracker.take("log").resolve(logPage("visible-new"));
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("visible-new.ts");
+    expect(textOf(panel.tree)).not.toContain("hidden-old.ts");
+    panel.unmount();
+  });
+
   it("keeps two mounted Sessions isolated", async () => {
     const first = remoteHarness();
     const second = remoteHarness();

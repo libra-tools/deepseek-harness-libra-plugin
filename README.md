@@ -161,7 +161,7 @@ The bundle contributes a `Libra` page tab to the right sidebar (`libra-version-c
 - a diagnostics area with the live bridge evidence the Host recorded: executable path and SHA-256, child PID, negotiated protocol and method list, bundle package directory, bundle entry path and SHA-256;
 - explicit loading, empty, unbound, not-a-repository, unsupported-capability, disconnected and moved states instead of an empty repository.
 
-The panel reads through the `libraVcs` Remote namespace and the `libraEvidence` diagnostics namespace; it never selects a repository, revision range or absolute path. A refresh cancels its stale page and the panel keeps working while the sidebar is collapsed or the Session is hidden.
+The panel reads through the `libraVcs` Remote namespace and the `libraEvidence` diagnostics namespace; it never selects a repository, revision range or absolute path. A refresh cancels its stale page. The panel tracks the Host binding key and generation: while the tab is visible it checks them on a short interval, and when it becomes visible again it revalidates before showing cached rows, so a rebind or replacement bridge never leaves another repository's data on screen. A binding change made while the tab is visible is applied at the next check.
 
 ### Typed VCS reads
 

@@ -483,6 +483,7 @@ globalThis.__ModuleLoader__.load({
       const [diff, setDiff] = React.useState(null);
       const [detail, setDetail] = React.useState(null);
       const [errors, setErrors] = React.useState({});
+      const [verifying, setVerifying] = React.useState(false);
       const [diagnostics, setDiagnostics] = React.useState({ available: false });
       const [expanded, setExpanded] = React.useState(false);
       const channels = React.useRef(new Map());
@@ -647,9 +648,15 @@ globalThis.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (!tab.tab.visible) return undefined;
-        // Binding identity is control-plane data; a rebind must clear rows even
-        // when no repository read is in progress.
-        const timer = globalThis.setInterval(() => { checkBinding(); }, 10_000);
+        // Do not show cached rows until the binding that produced them is still
+        // current; a rebind or replacement bridge while hidden must not flash.
+        setVerifying(true);
+        Promise.resolve()
+          .then(() => checkBinding())
+          .finally(() => { if (!tab.tab.signal.aborted) setVerifying(false); });
+        // Binding identity is control-plane data; a rebind must invalidate rows
+        // even when no repository read is in progress.
+        const timer = globalThis.setInterval(() => { checkBinding(); }, 5_000);
         return () => { globalThis.clearInterval(timer); };
       }, [tab.tab.visible]);
 
@@ -715,22 +722,22 @@ globalThis.__ModuleLoader__.load({
         h("header", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
           h("strong", null, t("panelTitle")),
           panelButton(t("panelRefresh"), refresh, false)),
-        loading ? h("p", { role: "status" }, t("panelLoading")) : null,
-        banner,
-        binding !== null ? null : h("div", null,
+        loading || verifying ? h("p", { role: "status" }, t("panelLoading")) : null,
+        verifying ? null : banner,
+        verifying || binding !== null ? null : h("div", null,
           sectionHeading(t("statusTitle")),
           errors.status !== undefined ? h("p", { role: "status" }, t(errors.status)) : null,
           groups.length === 0 && errors.status === undefined ? h("p", null, t("panelEmpty")) : null,
           h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
             groups.map((group) => statusGroupRow(group, selected, openDiff, t))),
           status.next === null ? null : panelButton(t("statusMore"), () => loadStatus(status.next), statusLoading)),
-        binding !== null ? null : diffSection(diff, t),
-        binding !== null ? null : h("div", null,
+        verifying || binding !== null ? null : diffSection(diff, t),
+        verifying || binding !== null ? null : h("div", null,
           sectionHeading(t("historyTitle")),
           errors.history !== undefined ? h("p", { role: "status" }, t(errors.history)) : null,
           history.commits.length === 0 ? h("p", null, t("panelEmpty")) : historySection(history, detail, t, loadHistory, openCommit, loadDetailMore)),
-        errors.detail !== undefined ? h("p", { role: "status" }, t(errors.detail)) : null,
-        diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }));
+        verifying ? null : errors.detail !== undefined ? h("p", { role: "status" }, t(errors.detail)) : null,
+        verifying ? null : diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }));
     }
 
     function LibraTitle(props) {
