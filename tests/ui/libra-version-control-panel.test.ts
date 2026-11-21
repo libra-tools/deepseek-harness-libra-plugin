@@ -667,6 +667,72 @@ describe("Libra panel component flows", () => {
     panel.unmount();
   });
 
+  it("does not append a previous commit's file page to another commit", async () => {
+    const tracker = remoteHarness({ cooperativeAborts: false });
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve({
+      ok: true,
+      data: {
+        commits: [
+          { oid: "a".repeat(40), summary: "first", authorTime: 1 },
+          { oid: "b".repeat(40), summary: "second", authorTime: 2 },
+        ],
+        cursor: { next: null },
+      },
+    });
+    await panel.settle();
+
+    const firstCommit = button(panel.tree, "aaaaaaaa first");
+    firstCommit!();
+    await tick();
+    tracker.take("show").resolve({
+      ok: true,
+      data: {
+        oid: "a".repeat(40), summary: "first", parents: [],
+        files: [{ path: "a-one.ts", state: "staged", oldPath: null }],
+        cursor: { next: "1" },
+      },
+    });
+    await panel.settle();
+
+    // A file page for commit A is still in flight when commit B is opened.
+    const moreFiles = button(panel.tree, "t:detailMore");
+    moreFiles!();
+    await tick();
+    const pendingPageA = tracker.take("show");
+
+    const secondCommit = button(panel.tree, "bbbbbbbb second");
+    secondCommit!();
+    await tick();
+    const pageB = tracker.take("show");
+
+    pageB.resolve({
+      ok: true,
+      data: {
+        oid: "b".repeat(40), summary: "second", parents: [],
+        files: [{ path: "b-one.ts", state: "staged", oldPath: null }],
+        cursor: { next: null },
+      },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("b-one.ts");
+
+    // The old page settles late; it must not append to commit B's list.
+    pendingPageA.resolve({
+      ok: true,
+      data: {
+        oid: "a".repeat(40), summary: "first", parents: [],
+        files: [{ path: "a-two.ts", state: "staged", oldPath: null }],
+        cursor: { next: null },
+      },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree)).not.toContain("a-two.ts");
+    panel.unmount();
+  });
+
   it("keeps two mounted Sessions isolated", async () => {
     const first = remoteHarness();
     const second = remoteHarness();

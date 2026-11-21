@@ -632,6 +632,9 @@ globalThis.__ModuleLoader__.load({
       };
 
       const openCommit = (oid) => {
+        // A pending file page belongs to the previously selected commit; it
+        // must not append to the commit the user just selected.
+        abortChannel("detailMore");
         setDetail(null);
         run("detail", (signal, requestId) => libra.call("show", { oid, limit: 20 }, requestId, signal))
           .then((result) => {
@@ -650,14 +653,15 @@ globalThis.__ModuleLoader__.load({
       };
       const loadDetailMore = (cursor) => {
         if (detail === null) return;
+        const oid = detail.oid;
         setDetail({ ...detail, loading: true });
-        run("detailMore", (signal, requestId) => libra.call("show", { oid: detail.oid, cursor, limit: 20 }, requestId, signal))
+        run("detailMore", (signal, requestId) => libra.call("show", { oid, cursor, limit: 20 }, requestId, signal))
           .then((result) => {
             if (result.stale === true || result.cancelled === true) return;
             const view = failureState(result);
             if (view.state !== "ok") { fail(view, "detailMore"); return; }
             succeed("detailMore");
-            setDetail((current) => current === null ? current : ({
+            setDetail((current) => current === null || current.oid !== oid ? current : ({
               ...current,
               files: current.files.concat(result.data.files),
               next: result.data.cursor.next,
