@@ -124,6 +124,25 @@ export class LibraVcsReadService {
 
   constructor(private readonly resolve: VcsScopeResolver) {}
 
+  /** Current binding identity of a Session, for the panel's rebind detection. */
+  async binding(session: unknown): Promise<{ ok: true; bindingKey: string; generation: number } | { ok: false; kind: VcsHostFailureKind; message: string }> {
+    if (typeof session !== "object" || session === null || !("id" in session)) {
+      return { ok: false, kind: "no_working_directory", message: "a Session is required" };
+    }
+    let resolution: VcsScopeResolution | undefined;
+    try {
+      resolution = await this.resolve(session);
+    } catch (error) {
+      return { ok: false, kind: "internal", message: String(error) };
+    }
+    if (resolution === undefined) return { ok: false, kind: "no_working_directory", message: "this Session is not bound yet" };
+    if (!resolution.ok) {
+      const mapped = failureToHostError(resolution.failure);
+      return { ok: false, kind: mapped.kind, message: mapped.message };
+    }
+    return { ok: true, bindingKey: resolution.scope.bindingKey, generation: resolution.scope.generation };
+  }
+
   status(session: unknown, params: VcsStatusParams = {}, options: VcsReadOptions = {}): Promise<VcsStatusResult> {
     return this.call(session, "status", params, options, (read, signal) => read.status(params, signal));
   }

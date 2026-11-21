@@ -24,7 +24,7 @@ import {
   type ResolvedDeployment,
 } from "./deployment.js";
 import { invokeVcsReadTool, LibraVcsReadService, VcsHostError } from "./vcs-read.js";
-import { LibraEvidenceRemote } from "./evidence-remote.js";
+import { evaluateSessionEvidence, LibraEvidenceRemote } from "./evidence-remote.js";
 import { LibraVcsRemote } from "./vcs-remote.js";
 import { libraMemoryProjection } from "./memory-projection.js";
 import {
@@ -648,16 +648,17 @@ export async function applyPerSession(
       : registry.liveBindings().find((candidate) => candidate.key === record.key);
     const hostDirectory = session === undefined ? undefined : hostDirectoryOf(session);
     const boundDirectory = registry.sessionDirectory(sessionId);
-    if (session === undefined || record === undefined || binding === undefined
-      || hostDirectory === undefined || boundDirectory === undefined
-      || !sameDirectory(hostDirectory, boundDirectory)) {
-      return {
-        ok: false,
-        error: {
-          kind: session === undefined ? "no_working_directory" : "cwd_changed",
-          message: "this Session is not bound to the repository its live bridge serves",
-        },
-      };
+    const verdict = evaluateSessionEvidence({
+      sessionLive: session !== undefined,
+      recordKeyMatches: record !== undefined && binding !== undefined,
+      connected: binding?.client.connected === true,
+      ...(hostDirectory === undefined ? {} : { hostDirectory }),
+      ...(boundDirectory === undefined ? {} : { boundDirectory }),
+      sameDirectory,
+    });
+    if (!verdict.ok) return verdict;
+    if (session === undefined || binding === undefined) {
+      return { ok: false, error: { kind: "cwd_changed", message: "this Session has no live binding to report" } };
     }
     return {
       ok: true,

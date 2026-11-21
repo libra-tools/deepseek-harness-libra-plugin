@@ -46,6 +46,16 @@ export class LibraVcsRemote extends TypertRemoteService {
   }
 
   @Remote({ resources: { session: (sessionId: SessionId) => sessionId } })
+  async binding(sessionId: SessionId): Promise<
+    | { ok: true; bindingKey: string; generation: number }
+    | { ok: false; error: { kind: VcsHostFailureKind; message: string; retryable: boolean } }
+  > {
+    const result = await this.service.binding(this.session(sessionId));
+    if (result.ok) return result;
+    return { ok: false, error: { kind: result.kind, message: result.message, retryable: false } };
+  }
+
+  @Remote({ resources: { session: (sessionId: SessionId) => sessionId } })
   status(
     sessionId: SessionId,
     params: VcsStatusParams = {},

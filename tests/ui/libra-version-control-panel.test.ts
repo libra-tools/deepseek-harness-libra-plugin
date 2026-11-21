@@ -186,7 +186,8 @@ function remoteHarness(options: { cooperativeAborts?: boolean } = {}) {
     pending.set(method, queue);
     if (cooperative) signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
   });
-  const libra = { call: (method: DeferredCall["method"], params: Record<string, unknown>, requestId: string, signal: AbortSignal) => {
+  let bindingResult: { ok: true; bindingKey: string; generation: number } | { ok: false; error: { kind: string; message: string } } = { ok: true, bindingKey: "key-1", generation: 1 };
+  const libra = { binding: () => Promise.resolve(bindingResult), call: (method: DeferredCall["method"], params: Record<string, unknown>, requestId: string, signal: AbortSignal) => {
     switch (method) {
       case "status": return deferred("status")("s-1", params, requestId, signal);
       case "log": return deferred("log")("s-1", params, requestId, signal);
@@ -197,6 +198,7 @@ function remoteHarness(options: { cooperativeAborts?: boolean } = {}) {
   return {
     calls,
     libra,
+    setBinding(result: typeof bindingResult) { bindingResult = result; },
     take(method: DeferredCall["method"]): DeferredCall {
       const queue = pending.get(method);
       if (queue === undefined || queue.length === 0) throw new Error(`no pending ${method}`);
@@ -731,6 +733,44 @@ describe("Libra panel component flows", () => {
     await panel.settle();
     expect(textOf(panel.tree)).not.toContain("a-two.ts");
     panel.unmount();
+  });
+
+  it("clears and reloads panel data when the Host binding changes", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const intervals: Array<() => void> = [];
+    const originalInterval = globalThis.setInterval;
+    const originalClear = globalThis.clearInterval;
+    globalThis.setInterval = ((callback: () => void) => { intervals.push(callback); return 1; }) as typeof setInterval;
+    globalThis.clearInterval = (() => undefined) as typeof clearInterval;
+    try {
+      const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+      tracker.take("status").resolve(statusPage([{ path: "old-repo.ts", state: "staged" }]));
+      tracker.take("log").resolve(logPage("old-history"));
+      await panel.settle();
+      expect(textOf(panel.tree)).toContain("old-repo.ts");
+      expect(intervals).toHaveLength(1);
+
+      // The same Session is rebound while its tab stays open.
+      tracker.setBinding({ ok: true, bindingKey: "key-2", generation: 2 });
+      intervals[0]!();
+      await tick();
+      expect(tracker.pendingCount("status")).toBe(1);
+      expect(tracker.pendingCount("log")).toBe(1);
+      await panel.settle();
+      expect(textOf(panel.tree)).not.toContain("old-repo.ts");
+      expect(textOf(panel.tree)).not.toContain("old-history");
+
+      tracker.take("status").resolve(statusPage([{ path: "new-repo.ts", state: "unstaged" }]));
+      tracker.take("log").resolve(logPage("new-history"));
+      await panel.settle();
+      expect(textOf(panel.tree)).toContain("new-repo.ts");
+      expect(textOf(panel.tree)).toContain("aaaaaaaa new-history");
+      panel.unmount();
+    } finally {
+      globalThis.setInterval = originalInterval;
+      globalThis.clearInterval = originalClear;
+    }
   });
 
   it("keeps two mounted Sessions isolated", async () => {

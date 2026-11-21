@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { Context } from "@deepseek-ai/cordis";
 import { remoteMethods } from "@deepseek-ai/dsh-typert-protocol";
-import { LibraEvidenceRemote, type SessionEvidence } from "@libra/dsh-bundle";
+import { evaluateSessionEvidence, LibraEvidenceRemote, type SessionEvidence } from "@libra/dsh-bundle";
 
 const evidence: SessionEvidence = {
   identity: { worktreeId: "wt-1", worktreeRootHash: "r".repeat(64), headOid: null, branch: "main", unborn: true },
@@ -53,6 +53,30 @@ describe("libraEvidence namespace", () => {
           initialize: { protocol: { major: 1, minor: 2 }, methods: ["vcs.status"] },
         },
       },
+    });
+  });
+});
+
+describe("evidence isolation rules", () => {
+  const same = (left: string, right: string) => left === right;
+  const base = { sessionLive: true, recordKeyMatches: true, connected: true, hostDirectory: "/repo/a", boundDirectory: "/repo/a", sameDirectory: same };
+
+  it("accepts only a live, connected binding that still matches the Session directory", () => {
+    expect(evaluateSessionEvidence(base)).toEqual({ ok: true });
+    expect(evaluateSessionEvidence({ ...base, connected: false })).toMatchObject({ ok: false, error: { kind: "disconnected" } });
+    expect(evaluateSessionEvidence({ ...base, hostDirectory: "/repo/b" })).toMatchObject({ ok: false, error: { kind: "cwd_changed" } });
+    expect(evaluateSessionEvidence({ ...base, boundDirectory: undefined })).toMatchObject({ ok: false, error: { kind: "cwd_changed" } });
+    expect(evaluateSessionEvidence({ ...base, recordKeyMatches: false })).toMatchObject({ ok: false, error: { kind: "cwd_changed" } });
+  });
+
+  it("reports the recorded binding failure before any recorded evidence", () => {
+    expect(evaluateSessionEvidence({ ...base, failure: { kind: "not_a_repository" } })).toMatchObject({
+      ok: false,
+      error: { kind: "not_a_repository" },
+    });
+    expect(evaluateSessionEvidence({ ...base, sessionLive: false })).toMatchObject({
+      ok: false,
+      error: { kind: "no_working_directory" },
     });
   });
 });

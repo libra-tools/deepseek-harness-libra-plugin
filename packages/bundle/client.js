@@ -573,6 +573,25 @@ globalThis.__ModuleLoader__.load({
       };
 
       const diagnosticsGeneration = React.useRef(0);
+      const bindingKey = React.useRef(null);
+      const checkBinding = () => Promise.resolve()
+        .then(() => libra.binding())
+        .then((result) => {
+          if (result === undefined || result.ok !== true) {
+            if (bindingKey.current !== null) { bindingKey.current = null; refresh(); }
+            return;
+          }
+          if (bindingKey.current !== null && bindingKey.current !== result.bindingKey) {
+            // The same Session was rebound while its tab stayed open: every
+            // row belongs to the previous repository and must go.
+            bindingKey.current = result.bindingKey;
+            refresh();
+            return;
+          }
+          bindingKey.current = result.bindingKey;
+        })
+        .catch(() => undefined);
+
       const loadDiagnostics = () => {
         diagnosticsGeneration.current += 1;
         const mine = diagnosticsGeneration.current;
@@ -603,6 +622,7 @@ globalThis.__ModuleLoader__.load({
         loadStatus(null);
         loadHistory(null);
         loadDiagnostics();
+        checkBinding();
       };
 
       React.useEffect(() => {
@@ -616,6 +636,14 @@ globalThis.__ModuleLoader__.load({
           abortAll();
         };
       }, []);
+
+      React.useEffect(() => {
+        if (!tab.tab.visible) return undefined;
+        // Binding identity is control-plane data; a rebind must clear rows even
+        // when no repository read is in progress.
+        const timer = globalThis.setInterval(() => { checkBinding(); }, 10_000);
+        return () => { globalThis.clearInterval(timer); };
+      }, [tab.tab.visible]);
 
       const openDiff = (entry) => {
         const sides = sidesForState(entry.state);
@@ -705,6 +733,9 @@ globalThis.__ModuleLoader__.load({
       return {
         call(method, params, requestId, signal) {
           return remote.libraVcs[method](sessionId, params, requestId, signal);
+        },
+        binding() {
+          return remote.libraVcs.binding(sessionId);
         },
       };
     }
