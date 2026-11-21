@@ -176,7 +176,7 @@ export async function applyPerSession(
    */
   const canonicalHostDirectory = (session: Session): string | undefined => {
     const directory = hostDirectoryOf(session);
-    if (directory === undefined) return undefined;
+    if (directory === undefined || !isAbsolute(directory)) return undefined;
     try { return realpathSync(directory); } catch { return undefined; }
   };
   const quarantineUnbound = (sessionId: string): void => {
@@ -257,7 +257,7 @@ export async function applyPerSession(
    */
   const sessionServedBy = (key: string) => (session: Session): boolean => {
     const sessionId = String(session.id);
-    if (bindingFailures.has(sessionId)) return false;
+    if (bindingFailures.has(sessionId) || deliveryFenced.has(sessionId)) return false;
     if (registry.sessionBinding(sessionId)?.key !== key) return false;
     const sessionDirectory = registry.sessionDirectory(sessionId);
     const hostDirectory = hostDirectoryOf(session);
@@ -647,6 +647,7 @@ export async function applyPerSession(
     // Deliver only events that verifiably belong here: the Host must still
     // resolve to the recorded directory of this repository.
     if (deliveryFenced.has(sessionId)) return;
+    if (registry.sessionBindingRecord(sessionId) === undefined && deliveryFenced.has(sessionId)) return;
     const hostDirectory = hostDirectoryOf(session);
     const recordedDirectory = registry.sessionDirectory(sessionId);
     const record = registry.sessionBindingRecord(sessionId);
@@ -659,6 +660,7 @@ export async function applyPerSession(
       try {
         const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
         let accepted = 0;
+        let quarantined = false;
         for (const line of lines) {
           const parsed = JSON.parse(line) as { seq: number; type: string; payload: string; origin?: string };
           // Deliver only events whose recorded origin is this repository; a
@@ -668,8 +670,10 @@ export async function applyPerSession(
               || (hostDirectory !== undefined && sameDirectory(parsed.origin, hostDirectory)))) {
             try {
               renameSync(path, spoolPath(sessionId, `quarantine-${Date.now()}`));
+              quarantined = true;
             } catch {
               deliveryFenced.add(sessionId);
+              return;
             }
             break;
           }
@@ -680,6 +684,7 @@ export async function applyPerSession(
           })) break;
           accepted += 1;
         }
+        if (quarantined) continue;
         if (accepted === lines.length) {
           unlinkSync(path);
         } else if (accepted > 0) {
