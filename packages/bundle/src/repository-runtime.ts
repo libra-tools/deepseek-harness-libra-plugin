@@ -7,6 +7,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { Session } from "@deepseek-ai/dsh-session";
 import type { ApprovalService } from "@deepseek-ai/dsh-user-approval";
 import { BridgeClient } from "@libra/dsh-bridge-client";
+import { redactPayload } from "@libra/dsh-session";
 import { ToolsFacade } from "@libra/dsh-tools";
 
 import { registerLibraTools } from "./libra-tools.js";
@@ -128,10 +129,20 @@ export async function applyPerSession(
   const spoolEvent = (session: Session, event: BufferedSessionEvent, scope: string): boolean => {
     const sessionId = String(session.id);
     const path = spoolPath(sessionId, scope);
+    // The durable spool follows the same fail-closed redaction as the outbox:
+    // a payload that cannot be redacted is not written at all.
+    const redacted = redactPayload(JSON.stringify(event.data));
+    if (!redacted.ok) {
+      if (!spoolWarned.has(sessionId)) {
+        spoolWarned.add(sessionId);
+        ctx.logger.warn(`libra: session ${sessionId} has an event the spool cannot redact (${redacted.reason}); not persisted`);
+      }
+      return false;
+    }
     try {
-      mkdirSync(spoolRoot, { recursive: true });
-      const line = `${JSON.stringify({ seq: event.seq, type: event.type, data: event.data })}\n`;
-      appendFileSync(path, line, "utf8");
+      mkdirSync(spoolRoot, { recursive: true, mode: 0o700 });
+      const line = `${JSON.stringify({ seq: event.seq, type: event.type, payload: redacted.payload })}\n`;
+      appendFileSync(path, line, { encoding: "utf8", mode: 0o600 });
       const size = statSync(path).size;
       if (size > SPOOL_WARN_BYTES && !spoolWarned.has(sessionId)) {
         spoolWarned.add(sessionId);
@@ -143,9 +154,20 @@ export async function applyPerSession(
       return false;
     }
   };
-  const spoolScopeFor = (sessionId: string): string => {
+  /**
+   * Associate an event with the repository it belongs to. A Host move makes
+   * the association uncertain, so such events are quarantined instead of being
+   * delivered to whichever repository binds next.
+   */
+  const spoolScopeFor = (session: Session): string => {
+    const sessionId = String(session.id);
     const record = registry.sessionBindingRecord(sessionId);
-    return record === undefined ? "unbound" : record.key;
+    if (record === undefined) return "unbound";
+    const hostDirectory = hostDirectoryOf(session);
+    const recordedDirectory = registry.sessionDirectory(sessionId);
+    if (hostDirectory === undefined || recordedDirectory === undefined
+      || !sameDirectory(hostDirectory, recordedDirectory)) return "quarantine";
+    return record.key;
   };
   const sessionSerial = async <T>(sessionId: string, work: () => Promise<T>): Promise<T> => {
     const previous = sessionTails.get(sessionId) ?? Promise.resolve();
@@ -415,6 +437,18 @@ export async function applyPerSession(
       runtime.sessions.add(sessionId);
       runtime.memory?.track(session);
       await runtime.workspace.claim(session);
+      // The Host may have moved the Session during the handshake; deliver the
+      // buffered events only when the binding still matches the Host directory.
+      const activatedHost = hostDirectoryOf(session);
+      const activatedDirectory = registry.sessionDirectory(sessionId);
+      if (activatedHost === undefined || activatedDirectory === undefined
+        || !sameDirectory(activatedHost, activatedDirectory)) {
+        await retireSession(runtime, session);
+        await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
+        const failure: BindingFailure = { kind: "cwd_changed", sessionId, bound: result.binding.identity.worktreeId, now: "" };
+        reportFailure(failure);
+        return undefined;
+      }
       flushSpooledEvents(sessionId, session, runtime);
       if (disposedSessions.has(sessionId)) {
         // The Session was disposed while its first bind was in flight; release
@@ -572,12 +606,17 @@ export async function applyPerSession(
     const runtime = bound === undefined ? undefined : runtimes.get(bound.key);
     if (runtime !== undefined && runtime.sessions.has(sessionId)
       && runtime.outbox.accepting() && sessionServedBy(bound!.key)(session)) return;
-    spoolEvent(session, event, spoolScopeFor(sessionId));
+    spoolEvent(session, event, spoolScopeFor(session));
   });
 
   const flushSpooledEvents = (sessionId: string, session: Session, runtime: PerRepositoryRuntime): void => {
-    // Drain only events associated with this repository (and the unbound
-    // pre-handshake tail); a tail from another binding stays durable.
+    // Deliver only events that verifiably belong here: the Host must still
+    // resolve to the recorded directory of this repository.
+    const hostDirectory = hostDirectoryOf(session);
+    const recordedDirectory = registry.sessionDirectory(sessionId);
+    const record = registry.sessionBindingRecord(sessionId);
+    if (hostDirectory === undefined || recordedDirectory === undefined
+      || record?.key !== runtime.binding.key || !sameDirectory(hostDirectory, recordedDirectory)) return;
     const scopes = [runtime.binding.key, "unbound"];
     for (const scope of scopes) {
       const path = spoolPath(sessionId, scope);
@@ -586,8 +625,12 @@ export async function applyPerSession(
         const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
         let accepted = 0;
         for (const line of lines) {
-          const parsed = JSON.parse(line) as BufferedSessionEvent;
-          if (!runtime.outbox.capture(session, parsed)) break;
+          const parsed = JSON.parse(line) as { seq: number; type: string; payload: string };
+          if (!runtime.outbox.capture(session, {
+            seq: parsed.seq,
+            type: parsed.type,
+            data: JSON.parse(parsed.payload) as unknown,
+          })) break;
           accepted += 1;
         }
         if (accepted === lines.length) {

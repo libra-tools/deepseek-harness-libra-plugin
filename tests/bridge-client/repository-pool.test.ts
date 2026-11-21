@@ -34,7 +34,7 @@ interface TestSession {
 interface Harness {
   ctx: Context;
   emit: (event: "session/created" | "session/disposed", session: TestSession) => Promise<void>;
-  capture: (session: TestSession, seq: number) => Promise<void>;
+  capture: (session: TestSession, seq: number, data?: unknown) => Promise<void>;
   execute: (name: string, session: TestSession) => Promise<unknown>;
   warnings: string[];
   evidence: () => LibraBridgeEvidenceService;
@@ -85,7 +85,7 @@ function makeHarness(directories: Map<string, string>): Harness {
         await (listener as unknown as (value: TestSession) => Promise<unknown>)(session);
       }
     },
-    capture: async (session, seq) => {
+    capture: async (session, seq, data) => {
       for (const listener of listeners.get("session/event") ?? []) {
         await (listener as unknown as (
           value: TestSession,
@@ -93,7 +93,7 @@ function makeHarness(directories: Map<string, string>): Harness {
         ) => Promise<unknown>)(session, {
           seq,
           type: "user/message",
-          data: { role: "user", content: [{ type: "text", text: "hello" }], source: { kind: "user" } },
+          data: data ?? { role: "user", content: [{ type: "text", text: "hello" }], source: { kind: "user" } },
         });
       }
     },
@@ -426,6 +426,22 @@ describe("Host session-to-repository pool", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.failure.kind).toBe("no_working_directory");
     expect(harness.evidence().failure("s-1")?.kind).toBe("no_working_directory");
+  }, 60_000);
+
+  it("does not spool an event the outbox would refuse to redact", async () => {
+    const shared = fixtureRoot("secret-spool");
+    roots = [shared];
+    const harness = await start(new Map([["s-1", shared]]));
+    const one = session("s-1");
+
+    await harness.capture(one, 0, {
+      role: "user",
+      content: [{ type: "text", text: "token sk-abcdefghijklmnopqrstuvwxyz" }],
+      source: { kind: "user" },
+    });
+
+    expect(spoolLines("s-1")).toBe(0);
+    expect(harness.warnings.some((entry) => entry.includes("cannot redact"))).toBe(true);
   }, 60_000);
 
   it("persists an event committed before the session finished binding", async () => {
