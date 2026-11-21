@@ -1,5 +1,5 @@
 /** Host-owned per-Session Libra bridge lifecycle (plan-20261118 LVC-03). */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -119,11 +119,41 @@ export async function applyPerSession(
       : defaultOutboxRoot(),
     "pending-events",
   );
-  const spoolBytes = new Map<string, number>();
   const spoolWarned = new Set<string>();
-  const MAX_SPOOL_BYTES = 64 * 1024 * 1024;
-  const spoolPath = (sessionId: string): string =>
-    join(spoolRoot, `${sessionId.replace(/[^A-Za-z0-9._:-]/g, "_")}.jsonl`);
+  const SPOOL_WARN_BYTES = 64 * 1024 * 1024;
+  const spoolName = (sessionId: string, identityKey: string): string =>
+    `${sessionId.replace(/[^A-Za-z0-9._:-]/g, "_")}.${identityKey.replace(/[^A-Za-z0-9._:-]/g, "_")}.jsonl`;
+  const spoolPath = (sessionId: string, identityKey: string): string =>
+    join(spoolRoot, spoolName(sessionId, identityKey));
+  /** Repository association of the events still waiting for a bridge. */
+  const scopesFor = (sessionId: string): string[] => {
+    const remembered = registry.sessionBindingRecord(sessionId);
+    const identity = remembered === undefined ? undefined : registry.sessionBinding(sessionId)?.key;
+    void identity;
+    return remembered === undefined ? ["unbound"] : [remembered.key, "unbound"];
+  };
+  const spoolEvent = (session: Session, event: BufferedSessionEvent, scope: string): boolean => {
+    const sessionId = String(session.id);
+    const path = spoolPath(sessionId, scope);
+    try {
+      mkdirSync(spoolRoot, { recursive: true });
+      const line = `${JSON.stringify({ seq: event.seq, type: event.type, data: event.data })}\n`;
+      appendFileSync(path, line, "utf8");
+      const size = statSync(path).size;
+      if (size > SPOOL_WARN_BYTES && !spoolWarned.has(sessionId)) {
+        spoolWarned.add(sessionId);
+        ctx.logger.warn(`libra: session ${sessionId} has ${size} bytes of unbound events; keeping the durable spool (disk bounded by bridge handshake timeout)`);
+      }
+      return true;
+    } catch (error) {
+      ctx.logger.warn(`libra: could not spool an event for session ${sessionId}: ${String(error)}`);
+      return false;
+    }
+  };
+  const spoolScopeFor = (sessionId: string): string => {
+    const record = registry.sessionBindingRecord(sessionId);
+    return record === undefined ? "unbound" : record.key;
+  };
   const sessionSerial = async <T>(sessionId: string, work: () => Promise<T>): Promise<T> => {
     const previous = sessionTails.get(sessionId) ?? Promise.resolve();
     let unlock!: () => void;
@@ -264,6 +294,9 @@ export async function applyPerSession(
           ...(deployment.outboxRoot !== undefined ? { outboxRoot: deployment.outboxRoot } : {}),
           serves,
           servesDisposal,
+          onCaptureFailure: (failedSession, failedEvent) => {
+            spoolEvent(failedSession, failedEvent, binding.key);
+          },
         });
         disposers.push(outbox.dispose);
 
@@ -544,49 +577,37 @@ export async function applyPerSession(
     const sessionId = String(session.id);
     const bound = registry.sessionBinding(sessionId);
     const runtime = bound === undefined ? undefined : runtimes.get(bound.key);
-    if (runtime !== undefined && runtime.sessions.has(sessionId) && sessionServedBy(bound!.key)(session)) return;
-    const path = spoolPath(sessionId);
-    const size = spoolBytes.get(sessionId) ?? (existsSync(path) ? statSync(path).size : 0);
-    if (size > MAX_SPOOL_BYTES) {
-      if (!spoolWarned.has(sessionId)) {
-        spoolWarned.add(sessionId);
-        ctx.logger.warn(`libra: session ${sessionId} has more than ${MAX_SPOOL_BYTES} bytes of unbound events; keeping the durable spool`);
-      }
-      return;
-    }
-    try {
-      mkdirSync(spoolRoot, { recursive: true });
-      const line = `${JSON.stringify({ seq: event.seq, type: event.type, data: event.data })}\n`;
-      appendFileSync(path, line, "utf8");
-      spoolBytes.set(sessionId, size + Buffer.byteLength(line, "utf8"));
-    } catch (error) {
-      ctx.logger.warn(`libra: could not spool an event for session ${sessionId}: ${String(error)}`);
-    }
+    if (runtime !== undefined && runtime.sessions.has(sessionId)
+      && runtime.outbox.accepting() && sessionServedBy(bound!.key)(session)) return;
+    spoolEvent(session, event, spoolScopeFor(sessionId));
   });
 
   const flushSpooledEvents = (sessionId: string, session: Session, runtime: PerRepositoryRuntime): void => {
-    const path = spoolPath(sessionId);
-    if (!existsSync(path)) return;
-    try {
-      const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
-      let accepted = 0;
-      for (const line of lines) {
-        const parsed = JSON.parse(line) as BufferedSessionEvent;
-        // Keep the durable copy unless the outbox confirms the capture.
-        if (!runtime.outbox.capture(session, parsed)) break;
-        accepted += 1;
+    // Drain only events associated with this repository (and the unbound
+    // pre-handshake tail); a tail from another binding stays durable.
+    const scopes = [runtime.binding.key, "unbound"];
+    for (const scope of scopes) {
+      const path = spoolPath(sessionId, scope);
+      if (!existsSync(path)) continue;
+      try {
+        const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
+        let accepted = 0;
+        for (const line of lines) {
+          const parsed = JSON.parse(line) as BufferedSessionEvent;
+          if (!runtime.outbox.capture(session, parsed)) break;
+          accepted += 1;
+        }
+        if (accepted === lines.length) {
+          unlinkSync(path);
+        } else if (accepted > 0) {
+          const remaining = `${lines.slice(accepted).join("\n")}\n`;
+          const temporary = `${path}.tmp`;
+          writeFileSync(temporary, remaining, "utf8");
+          renameSync(temporary, path);
+        }
+      } catch (error) {
+        ctx.logger.warn(`libra: could not drain spooled events for session ${sessionId}: ${String(error)}`);
       }
-      if (accepted === lines.length) {
-        unlinkSync(path);
-        spoolBytes.delete(sessionId);
-        spoolWarned.delete(sessionId);
-      } else if (accepted > 0) {
-        const remaining = `${lines.slice(accepted).join("\n")}\n`;
-        writeFileSync(path, remaining, "utf8");
-        spoolBytes.set(sessionId, Buffer.byteLength(remaining, "utf8"));
-      }
-    } catch (error) {
-      ctx.logger.warn(`libra: could not drain spooled events for session ${sessionId}: ${String(error)}`);
     }
   };
 

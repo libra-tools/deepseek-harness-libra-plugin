@@ -39,6 +39,8 @@ export interface OutboxMountOptions {
   serves?: (session: Session) => boolean;
   /** Allow cleanup of a session whose current cwd no longer serves this pool. */
   servesDisposal?: (session: Session) => boolean;
+  /** Route an event this outbox could not persist to a durable fallback. */
+  onCaptureFailure?: (session: Session, event: { seq: number; type: string; data: unknown }) => void;
 }
 
 /**
@@ -49,6 +51,7 @@ export interface OutboxMountOptions {
 export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: OutboxMountOptions): {
   retire: (session: Session) => Promise<void>;
   capture: (session: Session, event: { seq: number; type: string; data: unknown }) => boolean;
+  accepting: () => boolean;
   open: (session: Session) => Promise<void>;
   wait: (session: Session) => Promise<void>;
   setMemory: (memory: { wait: (session: Session) => Promise<void>; retire: (session: Session) => Promise<void> }) => void;
@@ -68,6 +71,7 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
   const namespace = createHash("sha256").update(options.repositoryRoot).digest("hex");
   const serves = options.serves ?? (() => true);
   const servesDisposal = options.servesDisposal ?? serves;
+  let accepting = true;
   const root = options.outboxRoot ?? defaultOutboxRoot();
   const namespaceRoot = join(root, namespace);
   const locks = new Map<string, GenerationClaim>();
@@ -208,11 +212,15 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
       return true;
     } catch (error) {
       ctx.logger.warn(`libra-outbox: event capture failed: ${String(error)}`);
+      try { options.onCaptureFailure?.(session, event); }
+      catch (fallbackError) {
+        ctx.logger.warn(`libra-outbox: durable fallback failed: ${String(fallbackError)}`);
+      }
       return false;
     }
   };
   disposers.push(ctx.on("session/event", (session, event) => {
-    if (!serves(session)) return;
+    if (!accepting || !serves(session)) return;
     capture(session, event);
   }));
   disposers.push(ctx.on("session/flush", async (session) => {
@@ -281,6 +289,7 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
   return {
     retire: retireSession,
     capture,
+    accepting: () => accepting,
     open: async (session) => {
       await retiring.get(String(session.id));
       const state = ensureProjection(session);
@@ -292,6 +301,9 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
     wait: async (session) => { await retiring.get(String(session.id)); },
     setMemory: (value) => { memory = value; },
     dispose: async () => {
+      // Stop accepting before removing the listener so the Host buffer takes
+      // over events committed during the drain.
+      accepting = false;
       for (const dispose of disposers.reverse()) dispose();
       await Promise.allSettled([...retiring.values()]);
       await Promise.all([...projections].map(async ([session, state]) => {

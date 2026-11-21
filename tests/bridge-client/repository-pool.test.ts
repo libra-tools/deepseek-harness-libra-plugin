@@ -155,9 +155,14 @@ describe("Host session-to-repository pool", () => {
   }
 
   function spoolLines(sessionId: string): number {
-    const path = join(outboxRoot!, "pending-events", `${sessionId}.jsonl`);
-    if (!existsSync(path)) return 0;
-    return readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0).length;
+    const directory = join(outboxRoot!, "pending-events");
+    if (!existsSync(directory)) return 0;
+    let lines = 0;
+    for (const name of readdirSync(directory)) {
+      if (!name.startsWith(`${sessionId}.`) || !name.endsWith(".jsonl")) continue;
+      lines += readFileSync(join(directory, name), "utf8").split("\n").filter((line) => line.length > 0).length;
+    }
+    return lines;
   }
 
   function totalQueuedFiles(): number {
@@ -261,8 +266,11 @@ describe("Host session-to-repository pool", () => {
     expect(harness.evidence().failure("s-1")).toBeUndefined();
     expect(result.binding.identity.worktreeId).not.toBe(before[0]!.identity.worktreeId);
     expect(harness.evidence().bindings()).toHaveLength(1);
-    // The spooled event is drained into the rebound repository.
-    expect(spoolLines("s-1")).toBe(0);
+    // The event still belongs to the repository the Session left, so it stays
+    // durable for that repository instead of being delivered to the new one.
+    expect(spoolLines("s-1")).toBe(1);
+    expect(totalQueuedFiles()).toBe(queuedBefore);
+    await harness.capture(one, 2);
     expect(totalQueuedFiles()).toBe(queuedBefore + 1);
   }, 60_000);
 
