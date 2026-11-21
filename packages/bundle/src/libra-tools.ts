@@ -153,9 +153,15 @@ function bridgeError(result: ToolResult): Error {
 
 export type ToolsResolver = (session: Session | undefined) => Promise<ToolsFacade | undefined>;
 
+/** Read-only view of the session's repository binding, for approval fencing. */
+export interface BindingScope {
+  generation(sessionId: string): number | undefined;
+}
+
 async function invokeLibra(
   approval: ApprovalService | undefined,
   resolveTools: ToolsResolver,
+  scope: BindingScope | undefined,
   def: ToolDefinition,
   args: Record<string, unknown>,
   exec: ToolRunContext,
@@ -169,10 +175,16 @@ async function invokeLibra(
   if (session !== undefined && def.parameters.includes("session_id")) {
     input.session_id = String(session.id);
   }
+  const sessionId = session === undefined ? undefined : String(session.id);
   if (APPROVAL_RISKS.has(def.risk)) {
     if (approval === undefined || exec.agent === undefined) {
       throw new Error(`${def.name}: no approval service is composed; refusing ${def.risk} operation`);
     }
+    // Capture the binding this approval is about; a move during the wait must
+    // invalidate it even if the Session later returns to the same repository.
+    const approvalGeneration = scope === undefined || sessionId === undefined
+      ? undefined
+      : scope.generation(sessionId);
     const outcome = await approval.request({
       agent: exec.agent,
       toolName: def.name,
@@ -185,16 +197,15 @@ async function invokeLibra(
     }
     input.operation_id ??= randomUUID();
     input.approval = { decision: "approved", approver: "dsh-approval" };
-  } else if (def.risk === "read") {
-    input.operation_id ??= randomUUID();
-  }
-  // Approval can wait for a person while the Host moves the Session to another
-  // repository; never send an approved write to the repository it left.
-  if (APPROVAL_RISKS.has(def.risk)) {
     const current = await resolveTools(session);
-    if (current === undefined || current !== tools) {
+    const generationNow = scope === undefined || sessionId === undefined
+      ? undefined
+      : scope.generation(sessionId);
+    if (current === undefined || current !== tools || generationNow !== approvalGeneration) {
       throw new Error(`${def.name}: the Session's repository binding changed during approval; refusing ${def.risk} operation`);
     }
+  } else if (def.risk === "read") {
+    input.operation_id ??= randomUUID();
   }
   const result = await tools.invoke(def.name, input);
   if (result.status === "error") throw bridgeError(result);
@@ -318,6 +329,7 @@ export function registerLibraTools(
   toolsService: ToolsService,
   resolveTools: ToolsResolver,
   approval: ApprovalService | undefined,
+  scope?: BindingScope,
 ): () => void {
   const disposers: Array<() => void> = [];
   for (const def of TOOL_CATALOG) {
@@ -333,7 +345,7 @@ export function registerLibraTools(
       presentCall: presentCallFor(def),
       presentResult: presentResultFor(def),
       async execute(args, exec) {
-        return invokeLibra(approval, resolveTools, def, args, exec);
+        return invokeLibra(approval, resolveTools, scope, def, args, exec);
       },
     })) as () => void);
   }

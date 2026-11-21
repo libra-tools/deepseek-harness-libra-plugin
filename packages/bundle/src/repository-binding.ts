@@ -168,6 +168,7 @@ function readIdentity(result: unknown): RepositoryIdentity | undefined {
 export class RepositoryRegistry {
   private readonly bindings = new Map<string, RepositoryBinding>();
   private readonly sessions = new Map<string, { key: string; cwd: string }>();
+  private readonly generations = new Map<string, number>();
   private readonly sessionTails = new Map<string, Promise<void>>();
   private readonly identityTails = new Map<string, Promise<void>>();
   private readonly bundleEntryPath: string;
@@ -186,6 +187,24 @@ export class RepositoryRegistry {
   sessionBinding(sessionId: string): RepositoryBinding | undefined {
     const bound = this.sessions.get(sessionId);
     return bound === undefined ? undefined : this.bindings.get(bound.key);
+  }
+
+  /** The session's own canonical directory inside its bound worktree. */
+  sessionDirectory(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.cwd;
+  }
+
+  /**
+   * Monotonic binding generation for one session. A rebind, a move inside the
+   * worktree, or a release increments it, so a caller that captured an earlier
+   * value can detect that the session moved while it waited.
+   */
+  sessionGeneration(sessionId: string): number | undefined {
+    return this.generations.get(sessionId);
+  }
+
+  private advanceGeneration(sessionId: string): void {
+    this.generations.set(sessionId, (this.generations.get(sessionId) ?? 0) + 1);
   }
 
   /**
@@ -231,6 +250,7 @@ export class RepositoryRegistry {
           };
         }
         this.sessions.set(sessionId, { key: bound.key, cwd });
+        this.advanceGeneration(sessionId);
         return { ok: true, binding: bound };
       }
       this.sessions.delete(sessionId);
@@ -246,6 +266,7 @@ export class RepositoryRegistry {
         await probe.client.close().catch(() => undefined);
         pooled.refs += 1;
         this.sessions.set(sessionId, { key: pooled.key, cwd });
+        this.advanceGeneration(sessionId);
         return { ok: true, binding: pooled };
       }
 
@@ -259,6 +280,7 @@ export class RepositoryRegistry {
       };
       this.bindings.set(binding.key, binding);
       this.sessions.set(sessionId, { key: binding.key, cwd });
+      this.advanceGeneration(sessionId);
       return { ok: true, binding };
     });
   }
@@ -297,6 +319,7 @@ export class RepositoryRegistry {
       }
       if (binding.refs <= 1) await beforeLastRelease?.(binding);
       this.sessions.delete(sessionId);
+      this.advanceGeneration(sessionId);
       binding.refs -= 1;
       if (binding.refs > 0) return;
       this.bindings.delete(binding.key);

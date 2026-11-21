@@ -123,14 +123,19 @@ export async function applyPerSession(
     readSessionWorkingDirectory(workingDirectory, session);
   /**
    * A session is served only while its Host directory still resolves to the
-   * bound worktree directory, so events and requests stop as soon as the Host
-   * moves the session instead of continuing against the old repository.
+   * directory recorded for that same session, so events and requests stop as
+   * soon as the Host moves it. Comparing against the session's own directory
+   * keeps sibling sessions of one worktree served even though the pooled
+   * bridge started in another one.
    */
-  const sessionServedBy = (key: string, boundCwd: string) => (session: Session): boolean => {
-    if (bindingFailures.has(String(session.id))) return false;
-    if (registry.sessionBinding(String(session.id))?.key !== key) return false;
+  const sessionServedBy = (key: string) => (session: Session): boolean => {
+    const sessionId = String(session.id);
+    if (bindingFailures.has(sessionId)) return false;
+    if (registry.sessionBinding(sessionId)?.key !== key) return false;
+    const sessionDirectory = registry.sessionDirectory(sessionId);
     const hostDirectory = hostDirectoryOf(session);
-    return hostDirectory !== undefined && sameDirectory(hostDirectory, boundCwd);
+    return sessionDirectory !== undefined && hostDirectory !== undefined
+      && sameDirectory(hostDirectory, sessionDirectory);
   };
 
   const reportFailure = (failure: BindingFailure): void => {
@@ -186,7 +191,7 @@ export async function applyPerSession(
       const deployment = deployments.get(binding.client);
       if (deployment === undefined) throw new Error("bridge deployment snapshot is unavailable");
       const disposers: Array<() => unknown> = [];
-      const serves = sessionServedBy(binding.key, binding.cwd);
+      const serves = sessionServedBy(binding.key);
       const servesDisposal = sessionOwnedBy(binding.key);
       let outbox: ReturnType<typeof mountLibraOutbox> | undefined;
       let workspace: ReturnType<typeof mountLibraWorkspace> | undefined;
@@ -347,6 +352,7 @@ export async function applyPerSession(
         toolsRuntime as Parameters<typeof registerLibraTools>[0],
         resolveTools,
         ctx.get("approval") as ApprovalService | undefined,
+        { generation: (sessionId) => registry.sessionGeneration(sessionId) },
       );
 
   const projections = ctx.get("sessionProjections") as SessionProjectionRegistrar | undefined;

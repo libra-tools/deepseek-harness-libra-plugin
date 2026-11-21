@@ -64,11 +64,14 @@ export function mountLibraContext(
     if (options.serves !== undefined && !options.serves(agent.session)) return next();
     const decision = await next();
     if (decision.kind === "reject" || signal.aborted) return decision;
+    // The Host can move the Session while the rest of the step runs; do not
+    // ground it with context from the repository it left.
+    if (options.serves !== undefined && !options.serves(agent.session)) return decision;
     if (step !== 1 || turn !== 1) return decision;
     const sessionId = String(agent.session.id);
     if (injected.has(sessionId)) return decision;
     const slice = await injector.inject(sessionId, options.intent);
-    if (signal.aborted) return decision;
+    if (signal.aborted || (options.serves !== undefined && !options.serves(agent.session))) return decision;
     injected.add(sessionId);
     if (slice.text.length === 0) return decision;
     return {

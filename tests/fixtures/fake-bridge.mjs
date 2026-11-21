@@ -5,6 +5,8 @@
  */
 import { createInterface } from "node:readline";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { Buffer } from "node:buffer";
 import { setTimeout } from "node:timers";
 
@@ -56,6 +58,20 @@ const leasesBySession = new Map();
 /** @type {Map<string, { session_id: string; workspace_id: string; lease_fence: number }>} */
 const leasesByWorkspace = new Map();
 const activeSessions = new Set();
+
+/**
+ * Fake repository discovery: the nearest ancestor holding `.libra`, so
+ * sessions opened in different subdirectories report one worktree identity.
+ */
+function worktreeRoot() {
+  let current = process.cwd();
+  for (;;) {
+    if (existsSync(join(current, ".libra"))) return current;
+    const parent = dirname(current);
+    if (parent === current) return process.cwd();
+    current = parent;
+  }
+}
 
 function writeResponse(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -275,8 +291,8 @@ rl.on("line", (line) => {
     writeResponse({
       jsonrpc: "2.0",
       result: {
-        worktree_root_hash: createHash("sha256").update(process.cwd()).digest("hex"),
-        worktree_id: `wt-${createHash("sha256").update(process.cwd()).digest("hex").slice(0, 12)}`,
+        worktree_root_hash: createHash("sha256").update(worktreeRoot()).digest("hex"),
+        worktree_id: `wt-${createHash("sha256").update(worktreeRoot()).digest("hex").slice(0, 12)}`,
         head_oid: null,
         branch: "main",
         unborn: true,

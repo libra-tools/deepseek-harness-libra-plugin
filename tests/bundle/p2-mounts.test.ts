@@ -214,6 +214,38 @@ describe("context injection", () => {
     dispose();
   });
 
+  it("does not ground a session that moved while the step ran", async () => {
+    bridge = makeBridge();
+    await bridge.connect();
+    const tools = new ToolsFacade(bridge, {
+      allowRead: true,
+      allowWrite: true,
+      allowRestore: true,
+      allowPushPublish: false,
+    });
+    const harness = makeContext([makeSession("c-moved")]);
+    let served = true;
+    const dispose = mountLibraContext(harness.ctx, tools, {
+      pluginName: "@libra-tools/dsh-bundle",
+      serves: () => served,
+    });
+    const preStep = harness.listenersOf("agent/pre-step")[0] as PreStepListener;
+    const request = vi.spyOn(bridge, "requestMethod");
+
+    const decision = await preStep(
+      { agent: { session: makeSession("c-moved") }, turn: 1, step: 1, signal: new AbortController().signal },
+      async () => {
+        // The Host moves the Session while the rest of the step runs.
+        served = false;
+        return { kind: "enter", messages: [user("probe")] };
+      },
+    );
+
+    expect((decision as { kind: "enter"; messages: TestMessage[] }).messages).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "context.get")).toHaveLength(0);
+    dispose();
+  });
+
   it("skips injection when the bridge returns an empty slice", async () => {
     bridge = makeBridge();
     await bridge.connect();

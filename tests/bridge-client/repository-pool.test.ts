@@ -6,7 +6,7 @@
  * one child serves each worktree, a cwd change fails closed, the explicit
  * Host rebind moves a session, and unload closes every child.
  */
-import { chmodSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -99,6 +99,7 @@ function session(id: string): TestSession {
 function fixtureRoot(name: string): string {
   const root = mkdtempSync(join(tmpdir(), `libra-pool-${name}-`));
   chmodSync(root, 0o755);
+  mkdirSync(join(root, ".libra"), { recursive: true });
   return root;
 }
 
@@ -180,10 +181,12 @@ describe("Host session-to-repository pool", () => {
     expect(new Set(owners)).toEqual(new Set(["s-1", "s-2"]));
   }, 60_000);
 
-  it("shares one bridge and one outbox namespace between sessions in the same worktree", async () => {
+  it("serves sibling subdirectories of one worktree through the shared bridge", async () => {
     const shared = fixtureRoot("shared");
     roots = [shared];
-    const harness = await start(new Map([["s-1", shared], ["s-2", shared]]));
+    const nested = join(shared, "packages", "app");
+    mkdirSync(nested, { recursive: true });
+    const harness = await start(new Map([["s-1", shared], ["s-2", nested]]));
     const one = session("s-1");
     const two = session("s-2");
 
