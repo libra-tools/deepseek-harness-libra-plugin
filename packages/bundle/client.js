@@ -515,7 +515,9 @@ globalThis.__ModuleLoader__.load({
       };
       const fail = (view, channel) => {
         if (BINDING_FAILURES.has(view.state)) {
+          abortAll();
           setBinding(view);
+          setDiagnostics({ available: false });
           setStatus({ entries: [], next: null });
           setHistory({ commits: [], next: null, loading: false });
           setSelected(null);
@@ -564,13 +566,26 @@ globalThis.__ModuleLoader__.load({
           });
       };
 
-      const loadDiagnostics = () => Promise.resolve()
-        .then(() => evidenceClient.session())
-        .then((result) => setDiagnostics(describeEvidence(result)))
-        .catch(() => setDiagnostics({ available: false }));
+      const diagnosticsGeneration = React.useRef(0);
+      const loadDiagnostics = () => {
+        diagnosticsGeneration.current += 1;
+        const mine = diagnosticsGeneration.current;
+        return Promise.resolve()
+          .then(() => evidenceClient.session())
+          .then((result) => {
+            if (diagnosticsGeneration.current !== mine) return;
+            setDiagnostics(describeEvidence(result));
+          })
+          .catch(() => {
+            if (diagnosticsGeneration.current !== mine) return;
+            setDiagnostics({ available: false });
+          });
+      };
 
       const refresh = () => {
-        abortChannel("diff");
+        // A refresh is a new generation for every channel: late results from the
+        // previous generation (including a pending commit detail) must not land.
+        abortAll();
         setDiff(null);
         setDetail(null);
         setSelected(null);

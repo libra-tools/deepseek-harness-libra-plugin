@@ -69,6 +69,7 @@ class Runtime {
     const position = this.index++;
     const hook = this.hooks[position] ?? (this.hooks[position] = { kind: "state", value: initial });
     const set = (next: unknown): void => {
+      if (this.unmounted) return;
       hook.value = typeof next === "function" ? (next as (current: unknown) => unknown)(hook.value) : next;
       this.dirty = true;
     };
@@ -277,6 +278,12 @@ const logPage = (summary: string, next: string | null = null) => ({
 });
 /** Let a click's Remote dispatch (scheduled in a microtask) reach the harness. */
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+function deferredEvidence() {
+  let resolve!: (value: unknown) => void;
+  const promise = new Promise<unknown>((settle) => { resolve = settle; });
+  return { session: () => promise, resolve };
+}
 
 const evidenceOk = {
   ok: true,
@@ -499,5 +506,121 @@ describe("Libra panel component flows", () => {
     expect(textOf(panel.tree)).toContain("aaaaaaaa second");
     expect(textOf(panel.tree)).not.toContain("t:historyMore");
     panel.unmount();
+  });
+
+  it("ignores late results from a generation superseded by refresh", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    const firstStatus = tracker.take("status");
+    const firstLog = tracker.take("log");
+
+    tabState.commands[0]!.refresh!();
+    await tick();
+    expect(firstStatus.signal.aborted).toBe(true);
+    expect(firstLog.signal.aborted).toBe(true);
+
+    tracker.take("status").resolve(statusPage([{ path: "new.ts", state: "staged" }]));
+    tracker.take("log").resolve(logPage("new"));
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("new.ts");
+    expect(textOf(panel.tree)).not.toContain("old");
+
+    // The superseded promises already rejected; resolving them cannot repaint.
+    firstStatus.resolve(statusPage([{ path: "old.ts", state: "staged" }]));
+    firstLog.resolve(logPage("old"));
+    await panel.settle();
+    expect(textOf(panel.tree)).not.toContain("old.ts");
+    panel.unmount();
+  });
+
+  it("cancels a pending commit detail across refresh", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve(logPage("first"));
+    await panel.settle();
+
+    const commit = button(panel.tree, "aaaaaaaa first");
+    commit!();
+    await tick();
+    const pendingShow = tracker.take("show");
+    tabState.commands[0]!.refresh!();
+    await tick();
+    expect(pendingShow.signal.aborted).toBe(true);
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve(logPage("second"));
+    await panel.settle();
+    expect(textOf(panel.tree)).not.toContain("t:detailTitle");
+    pendingShow.resolve({ ok: true, data: { oid: "b".repeat(40), summary: "stale", parents: [], files: [], cursor: { next: null } } });
+    await panel.settle();
+    expect(textOf(panel.tree)).not.toContain("t:detailTitle");
+    panel.unmount();
+  });
+
+  it("clears diagnostics on a binding failure and refuses a late evidence answer", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const evidence = deferredEvidence();
+    const panel = await mountPanel(tracker, tabState, () => evidence.session());
+    tracker.take("status").resolve(statusPage([{ path: "a.ts", state: "unstaged" }], "2"));
+    tracker.take("log").resolve(logPage("first"));
+    evidence.resolve(evidenceOk);
+    await panel.settle();
+
+    const show = button(panel.tree, "t:diagShow");
+    show!();
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("/opt/libra/bin/libra");
+
+    // A later status page reports a moved Session: every channel is invalidated.
+    const more = button(panel.tree, "t:statusMore");
+    more!();
+    await tick();
+    tracker.take("status").resolve({ ok: false, error: { kind: "cwd_changed", message: "moved" } });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("t:panelMoved");
+    expect(textOf(panel.tree)).not.toContain("/opt/libra/bin/libra");
+
+    // A late diagnostics answer cannot repopulate the panel.
+    evidence.resolve(evidenceOk);
+    await panel.settle();
+    expect(textOf(panel.tree)).not.toContain("/opt/libra/bin/libra");
+    panel.unmount();
+  });
+
+  it("keeps two mounted Sessions isolated", async () => {
+    const first = remoteHarness();
+    const second = remoteHarness();
+    const firstTab = tabHarness();
+    const secondTab = tabHarness();
+    const firstPanel = await mountPanel(first, firstTab, () => evidenceOk);
+    first.take("status").resolve(statusPage([{ path: "session-a.ts", state: "staged" }], "2"));
+    first.take("log").resolve(logPage("session-a"));
+    await firstPanel.settle();
+    expect(textOf(firstPanel.tree)).toContain("session-a.ts");
+
+    // Left pending on purpose: its late result must not reach another Session.
+    const lateMore = button(firstPanel.tree, "t:statusMore");
+    lateMore!();
+    await tick();
+    const lateStatus = first.take("status");
+
+    // The first Session's body unmounts when its record disappears; a second
+    // Session mounts independently and never inherits its rows.
+    firstPanel.unmount();
+    const secondPanel = await mountPanel(second, secondTab, () => evidenceOk);
+    second.take("status").resolve(statusPage([{ path: "session-b.ts", state: "staged" }]));
+    second.take("log").resolve(logPage("session-b"));
+    await secondPanel.settle();
+    expect(textOf(secondPanel.tree)).toContain("session-b.ts");
+    expect(textOf(secondPanel.tree)).not.toContain("session-a.ts");
+
+    // A late result aimed at the unmounted Session cannot repaint anything.
+    lateStatus.resolve(statusPage([{ path: "late.ts", state: "staged" }]));
+    await firstPanel.settle();
+    expect(textOf(secondPanel.tree)).not.toContain("late.ts");
+    secondPanel.unmount();
   });
 });

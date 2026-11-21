@@ -634,17 +634,28 @@ export async function applyPerSession(
     ctx.sessions.list().find((candidate) => String(candidate.id) === sessionId));
 
   new LibraEvidenceRemote(ctx, (sessionId) => {
+    const failure = bindingFailures.get(sessionId);
+    if (failure !== undefined) {
+      return {
+        ok: false,
+        error: { kind: failure.kind, message: "this Session's repository binding is not usable" },
+      };
+    }
+    const session = ctx.sessions.list().find((candidate) => String(candidate.id) === sessionId);
     const record = registry.sessionBindingRecord(sessionId);
     const binding = record === undefined
       ? undefined
       : registry.liveBindings().find((candidate) => candidate.key === record.key);
-    if (record === undefined || binding === undefined) {
-      const failure = bindingFailures.get(sessionId);
+    const hostDirectory = session === undefined ? undefined : hostDirectoryOf(session);
+    const boundDirectory = registry.sessionDirectory(sessionId);
+    if (session === undefined || record === undefined || binding === undefined
+      || hostDirectory === undefined || boundDirectory === undefined
+      || !sameDirectory(hostDirectory, boundDirectory)) {
       return {
         ok: false,
         error: {
-          kind: failure?.kind ?? "no_working_directory",
-          message: "this Session is not bound to a live Libra repository",
+          kind: session === undefined ? "no_working_directory" : "cwd_changed",
+          message: "this Session is not bound to the repository its live bridge serves",
         },
       };
     }
