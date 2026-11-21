@@ -6,7 +6,7 @@
  * one child serves each worktree, a cwd change fails closed, the explicit
  * Host rebind moves a session, and unload closes every child.
  */
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -426,6 +426,36 @@ describe("Host session-to-repository pool", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.failure.kind).toBe("no_working_directory");
     expect(harness.evidence().failure("s-1")?.kind).toBe("no_working_directory");
+  }, 60_000);
+
+  it("writes the spool with owner-only permissions", async () => {
+    const shared = fixtureRoot("spool-mode");
+    roots = [shared];
+    const harness = await start(new Map([["s-1", shared]]));
+    const one = session("s-1");
+
+    await harness.capture(one, 0);
+    const directory = join(outboxRoot!, "pending-events");
+    expect(statSync(directory).mode & 0o777).toBe(0o700);
+    const file = readdirSync(directory).find((name) => name.startsWith("s-1."))!;
+    expect(statSync(join(directory, file)).mode & 0o777).toBe(0o600);
+  }, 60_000);
+
+  it("quarantines a pre-binding tail when the session rebinds explicitly", async () => {
+    const shared = fixtureRoot("quarantine");
+    roots = [shared];
+    const harness = await start(new Map([["s-1", shared]]));
+    const one = session("s-1");
+
+    await harness.capture(one, 0);
+    expect(spoolLines("s-1")).toBe(1);
+
+    const result = await harness.binding().rebind(one);
+    expect(result.ok).toBe(true);
+    // The origin of that event is unknown after an explicit move, so it is
+    // retained for audit instead of delivered to the new repository.
+    expect(spoolLines("s-1")).toBe(1);
+    expect(totalQueuedFiles()).toBe(0);
   }, 60_000);
 
   it("does not spool an event the outbox would refuse to redact", async () => {

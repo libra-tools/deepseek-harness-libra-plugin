@@ -1,5 +1,5 @@
 /** Host-owned per-Session Libra bridge lifecycle (plan-20261118 LVC-03). */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -126,6 +126,11 @@ export async function applyPerSession(
     `${sessionId.replace(/[^A-Za-z0-9._:-]/g, "_")}.${identityKey.replace(/[^A-Za-z0-9._:-]/g, "_")}.jsonl`;
   const spoolPath = (sessionId: string, identityKey: string): string =>
     join(spoolRoot, spoolName(sessionId, identityKey));
+  const ensureSpoolRoot = (): void => {
+    mkdirSync(spoolRoot, { recursive: true, mode: 0o700 });
+    // An existing directory may carry broader modes from an older version.
+    chmodSync(spoolRoot, 0o700);
+  };
   const spoolEvent = (session: Session, event: BufferedSessionEvent, scope: string): boolean => {
     const sessionId = String(session.id);
     const path = spoolPath(sessionId, scope);
@@ -140,7 +145,8 @@ export async function applyPerSession(
       return false;
     }
     try {
-      mkdirSync(spoolRoot, { recursive: true, mode: 0o700 });
+      ensureSpoolRoot();
+      if (existsSync(path)) chmodSync(path, 0o600);
       const line = `${JSON.stringify({ seq: event.seq, type: event.type, payload: redacted.payload })}\n`;
       appendFileSync(path, line, { encoding: "utf8", mode: 0o600 });
       const size = statSync(path).size;
@@ -159,6 +165,15 @@ export async function applyPerSession(
    * the association uncertain, so such events are quarantined instead of being
    * delivered to whichever repository binds next.
    */
+  const quarantineUnbound = (sessionId: string): void => {
+    const path = spoolPath(sessionId, "unbound");
+    if (!existsSync(path)) return;
+    try {
+      renameSync(path, spoolPath(sessionId, `quarantine-${Date.now()}`));
+    } catch (error) {
+      ctx.logger.warn(`libra: could not quarantine pre-binding events for session ${sessionId}: ${String(error)}`);
+    }
+  };
   const spoolScopeFor = (session: Session): string => {
     const sessionId = String(session.id);
     const record = registry.sessionBindingRecord(sessionId);
@@ -445,6 +460,7 @@ export async function applyPerSession(
         || !sameDirectory(activatedHost, activatedDirectory)) {
         await retireSession(runtime, session);
         await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
+        quarantineUnbound(sessionId);
         const failure: BindingFailure = { kind: "cwd_changed", sessionId, bound: result.binding.identity.worktreeId, now: "" };
         reportFailure(failure);
         return undefined;
@@ -555,6 +571,8 @@ export async function applyPerSession(
         await retireIfMoved(session, undefined);
         return { ok: false, failure };
       }
+      // An explicit rebind makes the origin of any pre-binding tail uncertain.
+      quarantineUnbound(sessionId);
       const oldBinding = registry.sessionBinding(sessionId);
       const oldRuntime = oldBinding === undefined ? undefined : runtimes.get(oldBinding.key);
       // Fence the old runtime before draining it so concurrent events and tool
@@ -638,7 +656,8 @@ export async function applyPerSession(
         } else if (accepted > 0) {
           const remaining = `${lines.slice(accepted).join("\n")}\n`;
           const temporary = `${path}.tmp`;
-          writeFileSync(temporary, remaining, "utf8");
+          writeFileSync(temporary, remaining, { encoding: "utf8", mode: 0o600 });
+          chmodSync(temporary, 0o600);
           renameSync(temporary, path);
         }
       } catch (error) {
