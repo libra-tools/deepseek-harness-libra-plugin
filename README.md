@@ -147,6 +147,20 @@ All tools map to contract methods only—no wildcard bridge access.
 | `libra_commit` | `commit.create` | write | denied until approval |
 | `libra_review` | `review.run` | write | denied until approval |
 | `libra_restore_checkpoint` | `checkpoint.restore` | restore | denied until approval |
+| `libra_vcs_status` | `vcs.status` | read | allowed |
+| `libra_vcs_diff` | `vcs.diff` | read | allowed |
+| `libra_vcs_log` | `vcs.log` | read | allowed |
+| `libra_vcs_show` | `vcs.show` | read | allowed |
+
+### Typed VCS reads
+
+The four `libra_vcs_*` tools and the Host `libraVcsRead` service share one implementation over the typed methods frozen by LVC-02:
+
+- `vcs.status` returns a bounded page of `{ path, state }` entries plus an opaque `cursor.next`.
+- `vcs.diff` takes exactly one side selector (`worktree-vs-index`, `index-vs-head`, `worktree-vs-oid` with one object id) and optional repository-relative paths. Binary and over-budget files carry `truncated` plus `truncation` (`binary`, `byte_cap`, `page_cap`) instead of a patch; the response also reports its `byteCap`.
+- `vcs.log` returns commit summaries (`oid`, `summary`, `authorTime`) with a next cursor; `vcs.show` takes one commit object id and returns summary, parents and a paginated file list.
+
+Both callers resolve the repository from the caller's Session binding (LVC-03), so no caller selects a root, revision range or absolute path. Parameters are validated before a request leaves the plugin (`limit` 1–100, decimal cursors up to the library's offset cap); a method the bridge did not negotiate fails as `unsupported_capability`, and disconnected, invalid-parameter, cursor, scope and stale-state failures stay distinct kinds. The Host service accepts an `AbortSignal` so a panel refresh can cancel a stale page, and identical in-flight reads are shared instead of duplicating a bridge call.
 
 The model-visible parameter surface is filtered: bridge internals
 (`actor`, `repository_root`, `workspace_id`, `session_id`, `operation_id`,

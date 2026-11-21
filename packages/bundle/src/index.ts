@@ -30,6 +30,15 @@ import {
 import { applyPerSession } from "./repository-runtime.js";
 import type { WorkingDirectoryService } from "./repository-binding.js";
 
+export {
+  LibraVcsReadService,
+  VcsHostError,
+  type VcsHostFailureKind,
+  type VcsReadOptions,
+  type VcsReadScope,
+  type VcsScopeResolution,
+} from "./vcs-read.js";
+
 /** Cordis identity used by the DSH loader. */
 export const name = "@libra-tools/dsh-bundle";
 

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { BridgeClientError, type BridgeClient } from "@libra/dsh-bridge-client";
 
+import { VCS_READ_TOOLS } from "./vcs-read.js";
 import type {
   ApprovalPolicy,
   ApprovalDecision,
@@ -10,7 +11,7 @@ import type {
   ToolResult,
 } from "./types.js";
 
-export const TOOL_CATALOG: ToolDefinition[] = [
+const LEGACY_TOOL_CATALOG: ToolDefinition[] = [
   {
     name: "libra_context",
     bridge_method: "context.get",
@@ -103,6 +104,9 @@ export const TOOL_CATALOG: ToolDefinition[] = [
   },
 ];
 
+export const TOOL_CATALOG: ToolDefinition[] = [...LEGACY_TOOL_CATALOG, ...VCS_READ_TOOLS];
+
+
 const FORBIDDEN_MODEL_PARAMS = new Set([
   "actor",
   "repository_root",
@@ -132,6 +136,11 @@ export class ToolsFacade {
 
   getPolicy(): ApprovalPolicy {
     return this.policy;
+  }
+
+  /** Whether this facade's bridge negotiated a method. */
+  supports(method: string): boolean {
+    return this.bridge.negotiatedCapabilities?.methods.includes(method) === true;
   }
 
   listTools(): ToolDefinition[] {

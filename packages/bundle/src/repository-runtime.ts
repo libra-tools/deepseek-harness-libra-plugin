@@ -7,6 +7,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { Session } from "@deepseek-ai/dsh-session";
 import type { ApprovalService } from "@deepseek-ai/dsh-user-approval";
 import { BridgeClient } from "@libra/dsh-bridge-client";
+import { VcsReadMethods } from "@libra/dsh-bridge-client";
 import { redactPayload } from "@libra/dsh-session";
 import { ToolsFacade } from "@libra/dsh-tools";
 
@@ -14,7 +15,14 @@ import { registerLibraTools } from "./libra-tools.js";
 import { mountLibraContext } from "./context.js";
 import { defaultOutboxRoot, mountLibraOutbox } from "./outbox.js";
 import { mountLibraWorkspace } from "./workspace.js";
-import { readLive, resolveDeployment, resolveExecutable, type DeploymentConfig, type ResolvedDeployment } from "./deployment.js";
+import {
+  readLive,
+  resolveDeployment,
+  resolveExecutable,
+  type DeploymentConfig,
+  type ResolvedDeployment,
+} from "./deployment.js";
+import { LibraVcsReadService } from "./vcs-read.js";
 import { libraMemoryProjection } from "./memory-projection.js";
 import {
   RepositoryRegistry,
@@ -555,6 +563,33 @@ export async function applyPerSession(
     },
   };
   hostDisposers.push(ctx.reflect.provide("libraBridgeEvidence", diagnostics));
+
+  const vcsReadService = new LibraVcsReadService(async (value) => {
+    if (typeof value !== "object" || value === null || !("id" in value)) return undefined;
+    const session = value as Session;
+    const sessionId = String(session.id);
+    const runtime = await trackBind(session);
+    if (runtime === undefined) {
+      const failure = bindingFailures.get(sessionId);
+      return {
+        ok: false,
+        failure: failure ?? { kind: "bridge_unavailable", sessionId, cwd: "" } as BindingFailure,
+      };
+    }
+    const binding = runtime.binding;
+    if (!binding.client.connected) {
+      return { ok: false, failure: { kind: "bridge_unavailable", sessionId, cwd: binding.cwd } };
+    }
+    return {
+      ok: true as const,
+      scope: {
+        read: new VcsReadMethods(binding.client),
+        methods: binding.evidence.initialize.methods.filter((method) => method.startsWith("vcs.")),
+        bindingKey: binding.key,
+      },
+    };
+  });
+  hostDisposers.push(ctx.reflect.provide("libraVcsRead", vcsReadService));
 
   const bindingService: LibraRepositoryBindingService = {
     rebind: async (value) => {

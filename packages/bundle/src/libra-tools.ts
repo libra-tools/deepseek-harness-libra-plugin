@@ -72,6 +72,17 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
 
 /** Per-tool parameter descriptions (defaults to a neutral bridge hint). */
 const PARAMETER_DESCRIPTIONS: Record<string, string> = {
+  "libra_vcs_status.cursor": "Opaque next cursor from the previous status page.",
+  "libra_vcs_status.limit": "Status page size, 1-100.",
+  "libra_vcs_diff.sides": "One selector: worktree-vs-index, index-vs-head, or worktree-vs-oid.",
+  "libra_vcs_diff.oid": "Commit object id for the worktree-vs-oid side.",
+  "libra_vcs_diff.paths": "Repository-relative paths to diff.",
+  "libra_vcs_diff.limit": "Maximum diff files in this page, 1-100.",
+  "libra_vcs_log.cursor": "Opaque next cursor from the previous commit page.",
+  "libra_vcs_log.limit": "Commit page size, 1-100.",
+  "libra_vcs_show.oid": "The single commit object id to show.",
+  "libra_vcs_show.cursor": "Opaque next cursor from the previous file page.",
+  "libra_vcs_show.limit": "File page size, 1-100.",
   "libra_context.intent": "The intent or goal framing the context selection.",
   "libra_context.checkpoint_id": "Restrict context to this checkpoint.",
   "libra_checkpoint.limit": "Maximum number of checkpoints to return.",
@@ -171,6 +182,13 @@ async function invokeLibra(
   const tools = await resolveTools(session);
   if (tools === undefined) {
     throw new Error(`${def.name}: this session is not bound to an available Libra repository`);
+  }
+  // Typed reads must fail closed when the repository binding's bridge did not
+  // negotiate the method, instead of surfacing a generic method-not-found.
+  if (def.risk === "read" && !tools.supports(def.bridge_method)) {
+    throw new Error(`${def.name}: the bridge does not advertise ${def.bridge_method}`, {
+      cause: { code: "unsupported_capability" },
+    });
   }
   if (session !== undefined && def.parameters.includes("session_id")) {
     input.session_id = String(session.id);

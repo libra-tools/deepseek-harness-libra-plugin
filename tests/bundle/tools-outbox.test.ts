@@ -187,7 +187,20 @@ describe("libra tools registered as DSH tools", () => {
       "libra_restore_checkpoint",
       "libra_review",
       "libra_status",
+      "libra_vcs_diff",
+      "libra_vcs_log",
+      "libra_vcs_show",
+      "libra_vcs_status",
     ]);
+    const vcsDiff = harness.registry.find((def) => def.name === "libra_vcs_diff");
+    expect(Object.keys(vcsDiff!.parameters.properties).sort()).toEqual(["limit", "oid", "paths", "sides"]);
+    expect(vcsDiff!.parameters.properties.limit).toMatchObject({ type: "integer" });
+    expect(vcsDiff!.parameters.properties.sides).toMatchObject({ type: "string" });
+    expect(vcsDiff!.parameters.properties.sides.description).toContain("worktree-vs-index");
+    expect(vcsDiff!.parameters.properties.paths).toMatchObject({ type: "array", items: { type: "string" } });
+    const vcsShow = harness.registry.find((def) => def.name === "libra_vcs_show");
+    expect(vcsShow!.parameters.properties.oid).toMatchObject({ type: "string" });
+
     const status = harness.registry.find((def) => def.name === "libra_status");
     expect(status).toBeDefined();
     expect(Object.keys(status!.parameters.properties).sort()).toEqual([]);

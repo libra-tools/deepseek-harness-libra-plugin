@@ -18,3 +18,30 @@ export type {
   JsonRpcResponse,
   PendingRequest,
 } from "./types.js";
+
+export {
+  MAX_CURSOR_OFFSET,
+  MAX_PAGE,
+  VCS_READ_METHODS,
+  VcsReadError,
+  VcsReadMethods,
+} from "./vcs-methods.js";
+export type {
+  VcsCommitSummary,
+  VcsCursor,
+  VcsDiffFile,
+  VcsDiffParams,
+  VcsDiffResult,
+  VcsDiffSides,
+  VcsDiffTruncation,
+  VcsLogParams,
+  VcsLogResult,
+  VcsReadFailureKind,
+  VcsReadMethod,
+  VcsShowFile,
+  VcsShowParams,
+  VcsShowResult,
+  VcsStatusEntry,
+  VcsStatusParams,
+  VcsStatusResult,
+} from "./vcs-methods.js";
