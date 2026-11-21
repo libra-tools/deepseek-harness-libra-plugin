@@ -3,10 +3,10 @@
   "source": "deepseek-harness",
   "jsonrpc_version": "2.0",
   "fixture_provenance": {
-    "libra_version": "0.30.217",
+    "libra_version": "0.30.251",
     "fixture_origin": "src/internal/ai/agent_bridge/protocol.rs",
     "golden_frames_path": "tests/fixtures/agent_bridge/initialize.ndjson",
-    "authority_revision": "ff895071882e05c4bdfe4a227976bc3ad77ac0d4"
+    "authority_revision": "17b6745af530a9df01e37e31e6845a00064c2f75"
   },
   "methods": [
     "initialize",
@@ -35,8 +35,23 @@
     "vcs.status",
     "vcs.diff",
     "vcs.log",
-    "vcs.show"
+    "vcs.show",
+    "vcs.stage",
+    "vcs.unstage",
+    "vcs.commit"
   ],
+  "write_fence": {
+    "source_method": "vcs.status",
+    "path": "data.writeFence",
+    "fields": ["head", "indexGeneration", "worktreeGeneration"],
+    "head": "oid | null; null names an unborn HEAD",
+    "write_parameters": {
+      "expectedHead": "head",
+      "expectedIndex": "indexGeneration",
+      "expectedWorktree": "worktreeGeneration"
+    },
+    "absent_when": "a path changed while the status was read, the index snapshot could not be taken, or the repository state exceeds the write-fence limits"
+  },
   "limits": {
     "max_frame_bytes": 262144,
     "max_inflight": 64,

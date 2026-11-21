@@ -10,6 +10,7 @@ import {
   assertSupportedProtocolMajor,
   isMethodAllowed,
   loadProtocolReceiver,
+  resolveSchemaPath,
 } from "@libra/dsh-protocol";
 import type { AgentBridgeContract } from "@libra/dsh-protocol";
 
@@ -18,8 +19,7 @@ function writeMatchingReceipt(
   receiptPath: string,
   contract: AgentBridgeContract,
   fixtureSha?: string,
-): void {
-  const provenance = contract.fixture_provenance;
+): void {  const provenance = contract.fixture_provenance;
   const raw = readFileSync(schemaPath, "utf8");
   writeFileSync(receiptPath, JSON.stringify({
     protocol_version: contract.protocol_version,
@@ -48,9 +48,8 @@ describe("protocol receiver", () => {
     }
     expect(receiver.contract.protocol_version).toEqual({ major: 1, minor: 2 });
     // The fixture carries the plugin's contract: the original bridge methods,
-    // the optional memory facades a released binary advertises, and the five
-    // typed reads the authority revision added.
-    expect(receiver.contract.methods).toHaveLength(27);
+    // optional memory facades, five typed reads, and the three minor-2 writes.
+    expect(receiver.contract.methods).toHaveLength(30);
     expect(receiver.contract.methods[8]).toBe("memory.recall");
     expect(receiver.contract.methods[9]).toBe("memory.episode.record");
     expect(receiver.contract.methods).toContain("vcs.identity");
@@ -58,11 +57,14 @@ describe("protocol receiver", () => {
     expect(receiver.contract.methods).toContain("vcs.diff");
     expect(receiver.contract.methods).toContain("vcs.log");
     expect(receiver.contract.methods).toContain("vcs.show");
-    // The typed writes stay out of the contract until LVC-06.
-    expect(receiver.contract.methods).not.toContain("vcs.stage");
-    expect(receiver.contract.methods).not.toContain("vcs.unstage");
-    expect(receiver.contract.methods).not.toContain("vcs.commit");
+    expect(receiver.contract.methods).toContain("vcs.stage");
+    expect(receiver.contract.methods).toContain("vcs.unstage");
+    expect(receiver.contract.methods).toContain("vcs.commit");
     expect(receiver.contract.methods).not.toContain("vcs.fence");
+    expect(receiver.contract.protocol_version.minor).toBe(2);
+    expect(isMethodAllowed(receiver, "vcs.stage")).toBe(true);
+    expect(isMethodAllowed(receiver, "vcs.unstage")).toBe(true);
+    expect(isMethodAllowed(receiver, "vcs.commit")).toBe(true);
     expect(receiver.contract.limits.max_frame_bytes).toBe(256 * 1024);
     expect(receiver.contract.source).toBe("deepseek-harness");
     expect(receiver.contract.error_codes.memory_digest_unavailable).toEqual({
@@ -79,6 +81,41 @@ describe("protocol receiver", () => {
       code: 1011,
       stable_code: "LBR-AGENT-038",
       retryable: false,
+    });
+  });
+
+  it("publishes the write fence contract beside the negotiated write methods", () => {
+    const receiver = loadProtocolReceiver();
+    expect(receiver.status).toBe("ready");
+    if (receiver.status !== "ready") {
+      return;
+    }
+    // The fence a write needs comes from the negotiated status read, so the
+    // fixture names both sides of that contract.
+    expect(receiver.contract.methods).toContain("vcs.status");
+    expect(receiver.contract.methods).toContain("vcs.stage");
+    expect(receiver.contract.methods).toContain("vcs.unstage");
+    expect(receiver.contract.methods).toContain("vcs.commit");
+
+    const fixture = JSON.parse(
+      readFileSync(resolveSchemaPath(), "utf8"),
+    ) as {
+      write_fence?: {
+        source_method?: string;
+        path?: string;
+        fields?: string[];
+        write_parameters?: Record<string, string>;
+      };
+    };
+    const fence = fixture.write_fence;
+    expect(fence, "the fixture must publish the write fence contract").toBeDefined();
+    expect(fence?.source_method).toBe("vcs.status");
+    expect(fence?.path).toBe("data.writeFence");
+    expect(fence?.fields).toEqual(["head", "indexGeneration", "worktreeGeneration"]);
+    expect(fence?.write_parameters).toEqual({
+      expectedHead: "head",
+      expectedIndex: "indexGeneration",
+      expectedWorktree: "worktreeGeneration",
     });
   });
 

@@ -115,6 +115,42 @@ external `git` process, and errors that could carry host paths withhold the
 underlying detail. `status.get` remains bridge session/event/checkpoint
 telemetry, not worktree status.
 
+`vcs.status` also publishes the write fence in `data.writeFence`:
+
+| field | meaning |
+| --- | --- |
+| `head` | the HEAD commit id, or `null` when the repository has no commit yet |
+| `indexGeneration` | the digest of the current index bytes |
+| `worktreeGeneration` | the content-aware digest of the changed worktree paths |
+
+The three writes take the same three values back as `expectedHead`,
+`expectedIndex` and `expectedWorktree`. `expectedHead` accepts `null` (or the
+empty string) for an unborn HEAD. The status read builds the page and fence from one index snapshot and one
+worktree scan. It captures staged paths first, before scanning tracked files.
+For a tracked path whose content hash differs from the index, the scan captures
+its identity, metadata, and raw content digest between the first and second
+classification hashes, then captures them again after the second hash. The two
+classification hashes and both raw observations must agree. A path is left
+unfenceable when its observations disagree, when a capture or a metadata read
+could not be taken, when it exceeds the capture budget, or when a read failed
+for a reason other than absence; no later pass repairs such a path, and a path
+that was observed present and is gone later is equally unfenceable. A
+tracked candidate that classifies clean does not get an extra content capture.
+Mode or type changes and untracked paths get one capture during the scan. If a
+staged path is also seen by the tracked scan, both observations must agree. The
+published fence pins the captured content; a later change produces a different
+fence, and the write refuses the stale one. `data.writeFence` is absent, and
+the response carries the `write_fence_unavailable` warning, when a path changed
+while the status read it, when the index snapshot could not be taken, or when
+the state exceeds the fence limits; the status entries themselves are still
+returned. The status scan is not a filesystem-wide atomic snapshot: every write
+revalidates the supplied fence before publication, and stage also revalidates
+the exact prepared source snapshot immediately before replacing the index. A
+refusal at that boundary is definite: the index was not replaced, and the
+operation records that refusal as its outcome, so a replay of the same
+operation id reports the same refusal. Another process that ignores Libra's
+maintenance lock can still race the final publication window.
+
 ## VCS write extension (LVC-06)
 
-**Do not use the experimental `vcs.stage`, `vcs.unstage`, and `vcs.commit` methods.** They are not in the bridge allowlist and are not advertised by any released binary; the LVC-06 card that would enable them has not landed. The implementation behind them was corrected during LVC-02 — literal paths, a content-aware fence, an operation-specific publication record and a durable recovery answer — but an advertised method does not establish that it is safe or released, and the fixture deliberately omits them. `commit.create` retains its existing contract. See the LVC-02 / LVC-06 implementation review in the version-control plan.
+Protocol minor 2 adds `vcs.stage`, `vcs.unstage`, and `vcs.commit`. A peer must negotiate minor 2 before these methods appear in `initialize.methods` or can be called; older peers keep the previous method set. The Libra implementation uses bounded literal repository-relative paths, an `operation_id`, and the caller's HEAD/index/worktree fence, which the peer obtains from `vcs.status` as described above. `stage` and `unstage` update only the named index entries, while `commit` requires the authorized path set to exactly match the staged set. A stale fence is recorded as a terminal outcome and does not publish the prepared index or commit. These methods are not exposed through plugin UI or Agent tools until LVC-07, and REL-01 still has to cut the release before a released binary can be assumed to support them. `commit.create` retains its existing contract.

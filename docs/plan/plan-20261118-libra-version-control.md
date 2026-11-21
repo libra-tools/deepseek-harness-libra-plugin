@@ -224,11 +224,11 @@
 | DEP-03 | LVC-03 | LVC-04, LVC-05, LVC-07, LVC-08 | per-Session binding and per-repository bridge service | planned |
 | DEP-04 | LVC-04 | LVC-05 | Host read service and readonly tool contracts | planned |
 | DEP-05 | LVC-05 | LVC-07 | read-only panel shell and selected-session UI context | planned |
-| DEP-06 | LVC-06 | LVC-07 | fenced stage/unstage/commit bridge contract | planned |
+| DEP-06 | LVC-06 | LVC-07 | fenced stage/unstage/commit bridge contract | complete: implementation reviewed (PASS, 72 rounds) and delivered with the fixture/receipt proving the authority revision |
 | DEP-07 | LVC-07 | LVC-08 | shared UI/Agent mutation service | planned |
 | DEP-08 | LVC-08 | LVC-09 | capture status projection and verified linkage contract | planned |
 | DEP-09 | Libra release point | plugin release point | released bridge artifact + exact handshake compatibility evidence | planned |
-| DEP-10 | LVC-06 | LVC-03, LVC-04, LVC-05, LVC-07 | G-07 serial edge after the shared schema/protocol files are frozen, plus the REL-01 binary SHA-256 recorded in this plan | planned |
+| DEP-10 | LVC-06 | LVC-03, LVC-04, LVC-05, LVC-07 | G-07 serial edge after the shared schema/protocol files are frozen, plus the REL-01 binary SHA-256 recorded in this plan | in progress: LVC-06 is delivered and REL-01 is the next card |
 
 ## 任务卡
 
@@ -551,7 +551,7 @@
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `in-progress` / ` `
+**Lifecycle / Acceptance:** `done` / `complete`
 
 **Description:** Add explicit local write operations to Libra bridge using Libra VCS core and concurrency fences. Implementation on Libra `6651ccf` needs corrective work and review: its fence hashes only the first status page and is not atomic with mutations. Do not use the advertised write methods or cut REL-01 until those defects and the other acceptance criteria are verified.
 
@@ -561,20 +561,25 @@
 
 **Acceptance criteria:**
 
-- [ ] Add negotiated typed `stage`, `unstage`, and `commit` methods; no reinterpreting legacy `commit.create` semantics.
-- [ ] Inputs are bounded repository-relative literal paths, action enum, idempotency `operation_id`, and expected HEAD/index/worktree fence; no raw ref/pathspec/revision string.
-- [ ] Stale fence returns structured `stale_state` without mutation; repeated operation ID returns same recorded outcome; partial file failures identify each path.
-- [ ] Commit result includes commit OID and exact affected paths; session/evidence linkage only if explicitly requested and bridge confirms it.
-- [ ] No shell interpolation; operations call Libra internals, approval enforcement remains at the plugin/DSH boundary; bridge still validates repository scope.
-- [ ] Same-card ER-06/ER-12/ER-14 updates Libra bridge/developer protocol docs, `tests/INDEX.md`, compatibility record, and plugin protocol schema/receiver docs. Add `(new)` cases to the existing `agent_bridge_vcs_test`, `agent_bridge_mutation_test`, `agent_bridge_approval_test`, and `agent_bridge_protocol_test` targets; do not add targets unless registered in this card. Plugin user guide and website page are N/A until UI/tool exposure in LVC-07. CLI docs were updated because `libra agent bridge` now advertises the three methods.
+- [x] Add negotiated typed `stage`, `unstage`, and `commit` methods; no reinterpreting legacy `commit.create` semantics. `PROTOCOL_MINOR` is 2, the allowlist is 28 methods, and the typed methods are admitted only after a minor-2 handshake (`typed_vcs_methods_are_negotiated_by_minor`, `protocol_v1_allowlist_is_exactly_28_methods`).
+- [x] Inputs are bounded repository-relative literal paths, action enum, idempotency `operation_id`, and expected HEAD/index/worktree fence; no raw ref/pathspec/revision string. `validate_path_selector` refuses backslashes and pathspecs for typed writes, `MAX_FENCE_PATHS`/`MAX_FENCE_BYTES` bound the fence, and `expectedHead: null` names an unborn HEAD (`vcs_write_refuses_a_path_selector_with_a_backslash`, `vcs_status_carries_an_unborn_head_as_null`).
+- [x] Stale fence returns structured `stale_state` without mutation; repeated operation ID returns same recorded outcome; partial file failures identify each path. A definite refusal is recorded as the operation's terminal outcome and the replay returns it, and refusals are collected across every preparation phase (`vcs_stage_names_every_failing_path`, `vcs_stage_names_mixed_category_failures`, `vcs_stage_names_a_refusal_of_a_later_phase`, `vcs_unstage_names_every_failing_path`, `vcs_stage_replays_and_refuses_a_stale_fence`).
+- [x] Commit result includes commit OID and exact affected paths; session/evidence linkage only if explicitly requested and bridge confirms it (`vcs_commit_records_a_staged_deletion`, `vcs_commit_refuses_unselected_staged_paths`, `vcs_commit_scope_keeps_distinct_entry_names_apart`).
+- [x] No shell interpolation; operations call Libra internals, approval enforcement remains at the plugin/DSH boundary; bridge still validates repository scope (`vcs_stage_rejects_repository_metadata`, `vcs_stage_rejects_a_path_through_a_symlink_directory`, `vcs_stage_records_symlink_text_without_following_it`, `vcs_fence_uses_repository_relative_paths_from_subdirectory`).
+- [x] Same-card ER-06/ER-12/ER-14 updates Libra bridge/developer protocol docs, `tests/INDEX.md`, compatibility record, and plugin protocol schema/receiver docs. Add `(new)` cases to the existing `agent_bridge_vcs_test`, `agent_bridge_mutation_test`, `agent_bridge_approval_test`, and `agent_bridge_protocol_test` targets; do not add targets unless registered in this card. Plugin user guide and website page are N/A until UI/tool exposure in LVC-07. CLI docs were updated because `libra agent bridge` now advertises the three methods. `COMPATIBILITY.md`, `docs/commands/agent.md` and `docs/development/tracing/deepseek-harness.md` were updated in the same commit; `tests/INDEX.md` rows are unchanged because no target was added.
 
 **Verification:**
 
-- [ ] From Libra repo root, add `(new)` test functions to the existing targets and run: `cargo test --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test`.
-- [ ] `cargo +nightly fmt --all --check`
-- [ ] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test -- -D warnings`. Full `--all-targets` still stops in unchanged `tests/codex_capture_local_test.rs`.
+- [x] From Libra repo root, add `(new)` test functions to the existing targets and run: `cargo test --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test`. Delivered result: `agent_bridge_vcs_test` 127, `agent_bridge_mutation_test` 8, `agent_bridge_approval_test` 5, `agent_bridge_protocol_test` 8, plus `agent_bridge_read_methods_test` 10 and `agent_bridge_schema_test` 6. The `test-bridge-hooks` build of `agent_bridge_vcs_test` runs 174, and the new unit modules add 18 (`fence_tests` 17, `capture_budget_test` 2, of which the seam-gated ones run in the hook build).
+- [x] `cargo +nightly fmt --all --check` passes.
+- [x] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test -- -D warnings`. The stronger `cargo clippy --all-targets --all-features -- -D warnings` also passes on the delivered tree.
+- [x] Dual-environment closeout ran on the pre-rebase tree: `source .env.test && source .env.live-test && cargo nextest run --all --no-fail-fast --retries 2` executed 12,041 tests with 12,040 passed and 1 failed. The single failure is filed as `DEFER-LVC06-01` below; the same run's earlier revision also failed `cli::tests::pointer_layout_allowlist_matches_commands`, which the upstream fixed before the rebase.
 
 **Full-suite trigger:** `T-1` and `T-5`: new public write protocol and explicit approval/fence contract.
+
+**Closeout findings:**
+
+- `DEFER-LVC06-01` — `command::init_separate_libra_dir_test::legacy_separate_layout_repo_is_no_longer_detected` fails on the delivered tree: `libra status` in a directory whose `.libra` is a legacy `gitdir:` pointer file exits 0, so the test's `assert_ne!(status, 0)` fails at `tests/command/init_separate_libra_dir_test.rs:84`. The test and the repository-layout detection it exercises are outside this card's write set; `libra diff --stat origin/main HEAD` shows the LVC-06 commit touches only the bridge, `src/command/status.rs`, `src/command/maintenance.rs`, `src/internal/config_ownership.rs`, `src/utils/beneath.rs`, the four bridge test targets, `tests/INDEX.md`, `tests/SERIAL_REGISTRY.tsv`, `COMPATIBILITY.md` and the two developer docs, none of which decide legacy-layout detection. Reproduction on the pre-rebase tree (Libra `0.30.237`, which is `d242b90` plus the same single LVC-06 commit) fails identically with `TRY 3 FAIL`. Disposition: deferred to the plan that owns `libra init` layout detection; this card does not modify that surface.
 
 **Dependencies:** `DEP-01`, `DEP-02`。LVC-02 必须先于本卡，因为两卡共享 Libra protocol/method/VCS 文件和 plugin schema/receiver 文件。本卡结束后立刻切 REL-01，把 `libra --version` 的整行输出和该二进制 SHA-256 写入本计划；在此之前 LVC-03 及之后的卡不得开工，也不得与本卡并发。
 
@@ -606,7 +611,7 @@
 
 **Split/dependency notes:** Must be released before plugin exposes write actions.
 
-**修订历史:** 2026-11-19 在干净 `main` 实现并推送 `6651ccf`。REL-01 尚未切。
+**修订历史:** 2026-11-19 在干净 `main` 实现并推送 `6651ccf`。2026-11-20/21 在隔离的 `main` 工作区完成 72 轮 Codex 只读实现复审并修复：fence 与状态观测同源、所有观测失败一律不可 fence、status/write 两侧字节预算同账、暂存源快照在发布点复核、最终拒绝成为持久终态、普通 status 不再二次哈希；第 72 轮 `VERDICT: PASS`。2026-11-21/22 交付 `17b6745`（三次 upstream rebase 后，`0.30.251`），plugin fixture/receipt/receiver contract 指向 `17b6745af530a9df01e37e31e6845a00064c2f75`；`DEFER-LVC06-01` 记录唯一一条非本卡面的全量失败。REL-01 仍是下一张卡，LVC-03 及之后不得开工。
 
 ### Task LVC-07: Share mutation operations between UI and Agent tools
 
@@ -988,4 +993,6 @@ Codex 对 Libra `771e994..6651ccf` 只读审查结论 **VERDICT: FAIL**，0 项�
 | 2026-11-19 | LVC-02 | Libra `main` `3a22517` 增加 minor 1 的 `vcs.identity/status/diff/log/show`。此前修改旧 receipt 的 fixture 摘要，但未证明新增条目来自旧 authority revision；撤销 locally-accepted，待修正 provenance 并完成实现评审。全量 clippy 仍被未改动的 `codex_capture_local_test` 递归上限拦住。 | 不通过，待修复 |
 | 2026-11-19 | LVC-06 | Libra `main` `6651ccf` 增加 minor 2 的 `vcs.stage/unstage/commit`。当时声称过期 fence 在写入前拒绝，后续检查发现该结论不成立（只哈希第一页且检查与写入非原子）；撤销 locally-accepted。REL-01 未切，LVC-03 仍不得开工。 | 不通过，待修复 |
 | 2026-11-20 | LVC-02 实现复审 | 30 轮 Codex 只读复审（`codex exec --sandbox read-only --skip-git-repo-check`，模型 gpt-6.1-terra）。前 29 轮各暴露 1 个 P0/P1（终态识别、拒绝标记与原始 ID 混淆、条件写入拒绝未处理、恢复路径与写回结果之间的竞态、review 存活判定、提交恢复与记录之间的窗口等），每轮修复后补回归；第 30 轮 `VERDICT: PASS`，0×P0/0×P1。 | **PASS** |
+| 2026-11-21 | LVC-06 实现复审 | 72 轮 Codex 只读复审（`codex exec --sandbox read-only --skip-git-repo-check`，模型 gpt-6.1-terra）。每轮修复后补回归：fence 与状态观测绑定、失败捕获/元数据读取/消失路径/根不可固定/目录观测一律不可 fence、字节预算在 status 与 write 两侧同账（含符号链接重试与失败读取）、暂存源快照在发布点复核、最终拒绝成为持久终态并可重放、普通 status 不再二次哈希。第 72 轮 `VERDICT: PASS`，0×P0/0×P1。 | **PASS** |
+| 2026-11-21 | LVC-06 交付 | Libra `main` `17b6745`（原始提交经三次 upstream rebase；`0.30.251`，allowlist 25→28，`PROTOCOL_MINOR` 2）；plugin fixture/receipt/receiver contract 指向 `17b6745af530a9df01e37e31e6845a00064c2f75`。门禁：`agent_bridge_vcs_test` 127、`mutation` 8、`approval` 5、`protocol` 8、`read_methods` 10、`schema` 6 全通过；`test-bridge-hooks` 构建 174 通过；`fence_tests` 17 与 `capture_budget_test` 2 通过；`cargo +nightly fmt --all --check`、`cargo clippy --all-targets --all-features -- -D warnings` 通过；双环境全量 nextest（rebase 前同内容树）12041 例，12040 通过、1 例 `DEFER-LVC06-01`；plugin `vitest` 123 通过/5 跳过、`tsc -b` 与契约脚本通过。 | 接受（`DEFER-LVC06-01` 见 LVC-06 卡） |
 | 2026-11-20 | LVC-02 交付 | Libra `main` `ff89507`（启用五个 minor 1 typed read，allowlist 20→25，写方法仍未启用）与 `7577397`（CLI 命令文档方法清单）；plugin fixture/receipt/receiver contract 指向权威 revision `ff89507`（`libra 0.30.217`）。门禁：Libra `agent_bridge_vcs_test` 85、`read_methods` 10、`protocol` 8、`schema` 6、`mutation` 8、`approval` 5 全通过，故障注入构建 111 通过，`cargo +nightly fmt --all --check` 通过，`cargo clippy --all-targets --all-features -- -D warnings` 通过；plugin `vitest` 122 通过/5 跳过，`tsc -b` 与 bundle 构建通过，ESLint 对受版本控制的源文件无错误（`.release-artifacts/` 的 200 个错误来自本地暂存目录，非本卡改动）。 | 接受 |
