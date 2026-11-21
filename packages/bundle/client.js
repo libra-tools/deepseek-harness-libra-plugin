@@ -577,10 +577,16 @@ globalThis.__ModuleLoader__.load({
 
       const diagnosticsGeneration = React.useRef(0);
       const bindingState = React.useRef({ key: null, generation: null, ok: false, initialized: false });
-      const checkBinding = () => Promise.resolve()
+      const checkSequence = React.useRef(0);
+      const checkBinding = () => {
+        checkSequence.current += 1;
+        const mine = checkSequence.current;
+        return Promise.resolve()
         .then(() => libra.binding())
         .then((result) => {
+          if (checkSequence.current !== mine) return;
           setValidationFailed(false);
+          setVerifying(false);
           const previous = bindingState.current;
           if (result === undefined || result.ok !== true) {
             bindingState.current = { key: null, generation: null, ok: false, initialized: true };
@@ -603,15 +609,18 @@ globalThis.__ModuleLoader__.load({
           if (previous.initialized && changed) refresh();
         })
         .catch(() => {
+          if (checkSequence.current !== mine) return;
           // A rejected identity check cannot prove the cached rows belong to
           // the current binding; fail closed until a later check succeeds.
           setValidationFailed(true);
+          setVerifying(false);
         });
+      };
 
-      const loadDiagnostics = () => {
+      const loadDiagnostics = (force) => {
         diagnosticsGeneration.current += 1;
         const mine = diagnosticsGeneration.current;
-        if (binding !== null) return Promise.resolve();
+        if (force !== true && binding !== null) return Promise.resolve();
         return Promise.resolve()
           .then(() => evidenceClient.session())
           .then((result) => {
@@ -633,11 +642,15 @@ globalThis.__ModuleLoader__.load({
         setSelected(null);
         setBinding(null);
         setErrors({});
+        // Old evidence describes the previous binding; hide it at once and let
+        // the forced load replace it after the binding check.
+        diagnosticsGeneration.current += 1;
+        setDiagnostics({ available: false });
         setStatus({ entries: [], next: null });
         setHistory({ commits: [], next: null, loading: false });
         loadStatus(null);
         loadHistory(null);
-        loadDiagnostics();
+        loadDiagnostics(true);
         checkBinding();
       };
 
@@ -658,9 +671,7 @@ globalThis.__ModuleLoader__.load({
         // Do not show cached rows until the binding that produced them is still
         // current; a rebind or replacement bridge while hidden must not flash.
         setVerifying(true);
-        Promise.resolve()
-          .then(() => checkBinding())
-          .finally(() => { if (!tab.tab.signal.aborted) setVerifying(false); });
+        checkBinding();
         // Binding identity is control-plane data; a rebind must invalidate rows
         // even when no repository read is in progress.
         const timer = globalThis.setInterval(() => { checkBinding(); }, 5_000);

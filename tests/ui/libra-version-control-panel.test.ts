@@ -188,7 +188,16 @@ function remoteHarness(options: { cooperativeAborts?: boolean } = {}) {
   });
   let bindingResult: { ok: true; bindingKey: string; generation: number } | { ok: false; error: { kind: string; message: string } } = { ok: true, bindingKey: "key-1", generation: 1 };
   let bindingRejects = false;
-  const libra = { binding: () => (bindingRejects ? Promise.reject(new Error("transport down")) : Promise.resolve(bindingResult)), call: (method: DeferredCall["method"], params: Record<string, unknown>, requestId: string, signal: AbortSignal) => {
+  let bindingManual = false;
+  const bindingPending: Array<{ resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+  const libra = { binding: () => {
+    if (bindingManual) {
+      return new Promise<unknown>((resolve, reject) => {
+        bindingPending.push({ resolve, reject });
+      });
+    }
+    return bindingRejects ? Promise.reject(new Error("transport down")) : Promise.resolve(bindingResult);
+  }, call: (method: DeferredCall["method"], params: Record<string, unknown>, requestId: string, signal: AbortSignal) => {
     switch (method) {
       case "status": return deferred("status")("s-1", params, requestId, signal);
       case "log": return deferred("log")("s-1", params, requestId, signal);
@@ -201,6 +210,10 @@ function remoteHarness(options: { cooperativeAborts?: boolean } = {}) {
     libra,
     setBinding(result: typeof bindingResult) { bindingResult = result; bindingRejects = false; },
     rejectBinding() { bindingRejects = true; },
+    manualBinding() { bindingManual = true; },
+    resolveBinding(result: unknown) { bindingPending.shift()!.resolve(result); },
+    rejectPendingBinding() { bindingPending.shift()!.reject(new Error("transport down")); },
+    rejectLatestBinding() { bindingPending.pop()!.reject(new Error("transport down")); },
     take(method: DeferredCall["method"]): DeferredCall {
       const queue = pending.get(method);
       if (queue === undefined || queue.length === 0) throw new Error(`no pending ${method}`);
@@ -917,6 +930,87 @@ describe("Libra panel component flows", () => {
       globalThis.setInterval = originalInterval;
       globalThis.clearInterval = originalClear;
     }
+  });
+
+  it("ignores an out-of-order binding check after a newer one failed", async () => {
+    const tracker = remoteHarness();
+    tracker.manualBinding();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    // Mount and the initial visibility validation each start a check.
+    tracker.resolveBinding({ ok: true, bindingKey: "key-1", generation: 1 });
+    tracker.resolveBinding({ ok: true, bindingKey: "key-1", generation: 1 });
+    await panel.settle();
+    tracker.take("status").resolve(statusPage([{ path: "ordered-old.ts", state: "staged" }]));
+    tracker.take("log").resolve(logPage("ordered-old"));
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("ordered-old.ts");
+
+    // Two visibility checks are opened; only the newest may decide the view.
+    (tabState.tab.tab as { visible: boolean }).visible = false;
+    panel.render();
+    (tabState.tab.tab as { visible: boolean }).visible = true;
+    panel.render();
+    await tick();
+    (tabState.tab.tab as { visible: boolean }).visible = false;
+    panel.render();
+    (tabState.tab.tab as { visible: boolean }).visible = true;
+    panel.render();
+    await tick();
+
+    tracker.rejectLatestBinding(); // newest check fails
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("t:panelError");
+
+    tracker.resolveBinding({ ok: true, bindingKey: "key-2", generation: 2 }); // older check, late
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("t:panelError");
+    expect(textOf(panel.tree)).not.toContain("ordered-old.ts");
+
+    // A newest successful check recovers with the new binding's rows.
+    (tabState.tab.tab as { visible: boolean }).visible = false;
+    panel.render();
+    (tabState.tab.tab as { visible: boolean }).visible = true;
+    panel.render();
+    await tick();
+    tracker.resolveBinding({ ok: true, bindingKey: "key-2", generation: 2 });
+    await panel.settle();
+    tracker.take("status").resolve(statusPage([{ path: "ordered-new.ts", state: "staged" }]));
+    tracker.take("log").resolve(logPage("ordered-new"));
+    await panel.settle();
+    expect(textOf(panel.tree)).not.toContain("t:panelError");
+    expect(textOf(panel.tree)).toContain("ordered-new.ts");
+    panel.unmount();
+  });
+
+  it("hides old diagnostics during refresh until the new evidence arrives", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const evidence = deferredEvidence();
+    const panel = await mountPanel(tracker, tabState, () => evidence.session());
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve(logPage("first"));
+    evidence.resolveNext(evidenceOk);
+    await panel.settle();
+
+    const show = button(panel.tree, "t:diagShow");
+    show!();
+    await panel.settle();
+    evidence.resolveNext(evidenceOk);
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("/opt/libra/bin/libra");
+
+    tabState.commands[0]!.refresh!();
+    await panel.settle();
+    // The expanded diagnostics area is reset synchronously, before new evidence.
+    expect(textOf(panel.tree)).not.toContain("/opt/libra/bin/libra");
+    expect(evidence.pendingCount()).toBe(1);
+    evidence.resolveNext(evidenceOk);
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve(logPage("second"));
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("/opt/libra/bin/libra");
+    panel.unmount();
   });
 
   it("keeps two mounted Sessions isolated", async () => {
