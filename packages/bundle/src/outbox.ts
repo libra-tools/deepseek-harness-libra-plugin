@@ -22,7 +22,7 @@ import { OutboxStore, SessionProjectionService } from "@libra/dsh-session";
 import { acquireSessionLock, claimAbandoned, createGeneration, retireGeneration, type GenerationClaim } from "./recovery.js";
 
 /** Default outbox location lives outside the repository, under the DSH home. */
-function defaultOutboxRoot(): string {
+export function defaultOutboxRoot(): string {
   const home = process.env.DSH_HOME ?? join(homedir(), ".dsh");
   return join(home, "libra", "outbox");
 }

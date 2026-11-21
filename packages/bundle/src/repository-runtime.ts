@@ -1,6 +1,6 @@
 /** Host-owned per-Session Libra bridge lifecycle (plan-20261118 LVC-03). */
-import { realpathSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { Context } from "@deepseek-ai/cordis";
@@ -11,7 +11,7 @@ import { ToolsFacade } from "@libra/dsh-tools";
 
 import { registerLibraTools } from "./libra-tools.js";
 import { mountLibraContext } from "./context.js";
-import { mountLibraOutbox } from "./outbox.js";
+import { defaultOutboxRoot, mountLibraOutbox } from "./outbox.js";
 import { mountLibraWorkspace } from "./workspace.js";
 import { readLive, resolveDeployment, resolveExecutable, type DeploymentConfig, type ResolvedDeployment } from "./deployment.js";
 import { libraMemoryProjection } from "./memory-projection.js";
@@ -110,9 +110,20 @@ export async function applyPerSession(
   const pendingOperations = new Set<Promise<unknown>>();
   const sessionTails = new Map<string, Promise<void>>();
   const disposedSessions = new Set<string>();
-  const pendingEvents = new Map<string, Array<{ session: Session; event: BufferedSessionEvent }>>();
-  const MAX_BUFFERED_EVENTS = 256;
-  const bufferWarned = new Set<string>();
+  // Events committed while a Session's bridge handshake is in flight are
+  // persisted to disk and drained into the binding once it mounts, so capture
+  // survives a slow bind or an early disposal instead of being dropped.
+  const spoolRoot = join(
+    (readLive(config.outboxRoot)?.trim() || "").length > 0
+      ? readLive(config.outboxRoot)!.trim()
+      : defaultOutboxRoot(),
+    "pending-events",
+  );
+  const spoolBytes = new Map<string, number>();
+  const spoolWarned = new Set<string>();
+  const MAX_SPOOL_BYTES = 64 * 1024 * 1024;
+  const spoolPath = (sessionId: string): string =>
+    join(spoolRoot, `${sessionId.replace(/[^A-Za-z0-9._:-]/g, "_")}.jsonl`);
   const sessionSerial = async <T>(sessionId: string, work: () => Promise<T>): Promise<T> => {
     const previous = sessionTails.get(sessionId) ?? Promise.resolve();
     let unlock!: () => void;
@@ -378,7 +389,7 @@ export async function applyPerSession(
       runtime.sessions.add(sessionId);
       runtime.memory?.track(session);
       await runtime.workspace.claim(session);
-      flushBufferedEvents(sessionId, runtime);
+      flushSpooledEvents(sessionId, session, runtime);
       if (disposedSessions.has(sessionId)) {
         // The Session was disposed while its first bind was in flight; release
         // it now instead of keeping a bridge reference until unload.
@@ -503,7 +514,7 @@ export async function applyPerSession(
         runtime.sessions.add(sessionId);
         runtime.memory?.track(session);
         await runtime.workspace.claim(session);
-        flushBufferedEvents(sessionId, runtime);
+        flushSpooledEvents(sessionId, session, runtime);
         if (disposedSessions.has(sessionId)) {
           await retireSession(runtime, session);
           await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
@@ -534,28 +545,39 @@ export async function applyPerSession(
     const bound = registry.sessionBinding(sessionId);
     const runtime = bound === undefined ? undefined : runtimes.get(bound.key);
     if (runtime !== undefined && runtime.sessions.has(sessionId)) return;
-    if (disposedSessions.has(sessionId)) return;
-    const buffered = pendingEvents.get(sessionId) ?? [];
-    if (buffered.length >= MAX_BUFFERED_EVENTS) {
-      if (!bufferWarned.has(sessionId)) {
-        bufferWarned.add(sessionId);
-        ctx.logger.warn(`libra: dropped session events beyond ${MAX_BUFFERED_EVENTS} while binding session ${sessionId}`);
+    const path = spoolPath(sessionId);
+    const size = spoolBytes.get(sessionId) ?? (existsSync(path) ? statSync(path).size : 0);
+    if (size > MAX_SPOOL_BYTES) {
+      if (!spoolWarned.has(sessionId)) {
+        spoolWarned.add(sessionId);
+        ctx.logger.warn(`libra: session ${sessionId} has more than ${MAX_SPOOL_BYTES} bytes of unbound events; keeping the durable spool`);
       }
       return;
     }
-    buffered.push({ session, event });
-    pendingEvents.set(sessionId, buffered);
+    try {
+      mkdirSync(spoolRoot, { recursive: true });
+      const line = `${JSON.stringify({ seq: event.seq, type: event.type, data: event.data })}\n`;
+      appendFileSync(path, line, "utf8");
+      spoolBytes.set(sessionId, size + Buffer.byteLength(line, "utf8"));
+    } catch (error) {
+      ctx.logger.warn(`libra: could not spool an event for session ${sessionId}: ${String(error)}`);
+    }
   });
 
-  const flushBufferedEvents = (sessionId: string, runtime: PerRepositoryRuntime): void => {
-    const buffered = pendingEvents.get(sessionId);
-    if (buffered === undefined) return;
-    pendingEvents.delete(sessionId);
-    bufferWarned.delete(sessionId);
-    for (const item of buffered) {
-      if (disposedSessions.has(sessionId)) return;
-      if (!sessionServedBy(runtime.binding.key)(item.session)) continue;
-      runtime.outbox.capture(item.session, item.event);
+  const flushSpooledEvents = (sessionId: string, session: Session, runtime: PerRepositoryRuntime): void => {
+    const path = spoolPath(sessionId);
+    if (!existsSync(path)) return;
+    try {
+      const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
+      for (const line of lines) {
+        const parsed = JSON.parse(line) as BufferedSessionEvent;
+        runtime.outbox.capture(session, parsed);
+      }
+      unlinkSync(path);
+      spoolBytes.delete(sessionId);
+      spoolWarned.delete(sessionId);
+    } catch (error) {
+      ctx.logger.warn(`libra: could not drain spooled events for session ${sessionId}: ${String(error)}`);
     }
   };
 
@@ -567,12 +589,13 @@ export async function applyPerSession(
       const record = registry.sessionBindingRecord(sessionId);
       if (record !== undefined) {
         const runtime = runtimes.get(record.key);
-        if (runtime !== undefined) await retireSession(runtime, session);
+        if (runtime !== undefined) {
+          flushSpooledEvents(sessionId, session, runtime);
+          await retireSession(runtime, session);
+        }
         await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
       }
       bindingFailures.delete(sessionId);
-      pendingEvents.delete(sessionId);
-      bufferWarned.delete(sessionId);
     });
   });
   const disposePreStep = ctx.on("agent/pre-step", async ({ agent }, next) => {

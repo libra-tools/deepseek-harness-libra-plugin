@@ -7,6 +7,7 @@
  * repository.
  */
 import { mkdtemp, mkdir } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -303,6 +304,25 @@ describe("repository binding", () => {
     expect(second.client).not.toBe(first.client);
     expect(second.evidence.childPid).not.toBe(1000);
     expect(second.identity.worktreeId).toBe(first.identity.worktreeId);
+  });
+
+  it("does not leak a reference when one session moves inside its worktree", async () => {
+    const root = await fixture("sibling-move");
+    const sibling = join(root, "packages", "app");
+    await mkdir(sibling, { recursive: true });
+    const shared = identity(realpathSync(root));
+    const identities = new Map([[realpathSync(root), shared], [realpathSync(sibling), shared]]);
+    const { registry: instance } = registry(identities);
+
+    const first = bindingOf(await instance.bind("s-1", root));
+    const moved = bindingOf(await instance.bind("s-1", sibling));
+
+    expect(moved.client).toBe(first.client);
+    expect(first.refs).toBe(1);
+    expect(instance.sessionDirectory("s-1")).toBe(realpathSync(sibling));
+
+    await instance.release("s-1");
+    expect(instance.liveBindings()).toHaveLength(0);
   });
 
   it("reconciles reference counts when a shared bridge crashes", async () => {

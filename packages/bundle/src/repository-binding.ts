@@ -284,8 +284,14 @@ export class RepositoryRegistry {
       if (pooled !== undefined) {
         if (pooled.client.connected) {
           await probe.client.close().catch(() => undefined);
-          pooled.refs += 1;
-          this.attach(sessionId, pooled, cwd);
+          // A session that merely moved inside the worktree already owns a
+          // reference; adding another would leak it on release.
+          const attached = this.sessions.get(sessionId);
+          if (attached?.key === pooled.key) this.attachExisting(sessionId, pooled, cwd);
+          else {
+            pooled.refs += 1;
+            this.attach(sessionId, pooled, cwd);
+          }
           return { ok: true, binding: pooled };
         }
         // A crashed pooled client is replaced before anyone attaches to it.
@@ -307,6 +313,16 @@ export class RepositoryRegistry {
   }
 
   private attach(sessionId: string, binding: RepositoryBinding, cwd: string): void {
+    this.sessions.set(sessionId, { key: binding.key, cwd });
+    this.identities.set(sessionId, {
+      key: binding.key,
+      worktreeId: binding.identity.worktreeId,
+      cwd,
+    });
+    this.advanceGeneration(sessionId);
+  }
+
+  private attachExisting(sessionId: string, binding: RepositoryBinding, cwd: string): void {
     this.sessions.set(sessionId, { key: binding.key, cwd });
     this.identities.set(sessionId, {
       key: binding.key,
