@@ -30,6 +30,8 @@ import {
 import { applyPerSession } from "./repository-runtime.js";
 import type { WorkingDirectoryService } from "./repository-binding.js";
 
+export { LibraEvidenceRemote } from "./evidence-remote.js";
+export type { BridgeEvidenceInfo, EvidenceResolver, EvidenceResult, SessionEvidence } from "./evidence-remote.js";
 export { LibraVcsRemote, type SessionById } from "./vcs-remote.js";
 export { boundModelValue } from "./libra-tools.js";
 export {

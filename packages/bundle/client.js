@@ -25,6 +25,57 @@ globalThis.__ModuleLoader__.load({
       saved: "Saved. Binary and repository changes apply on the next bridge request.",
       failed: "Could not save these settings.",
       unavailable: "Settings are unavailable in this profile. Set libraExecutable in the bundle configuration instead.",
+      panelTitle: "Libra",
+      panelGuideTitle: "Libra version control",
+      panelGuideDescription: "Repository status, bounded diffs, commit history and bridge diagnostics for this Session.",
+      panelLoading: "Loading…",
+      panelRefresh: "Refresh",
+      panelUnbound: "This Session is not bound to a Libra repository. Open a Session whose working directory is inside a Libra worktree.",
+      panelNotRepository: "This Session's directory is not a Libra repository.",
+      panelUnsupported: "This Libra build does not support the read methods this panel needs.",
+      panelDisconnected: "The Libra bridge for this repository is unavailable right now.",
+      panelMoved: "This Session moved to another worktree. Open it again in the intended repository.",
+      panelError: "Could not read this repository.",
+      panelEmpty: "Nothing to show.",
+      statusTitle: "Changes",
+      statusStaged: "Staged",
+      statusUnstaged: "Unstaged",
+      statusUntracked: "Untracked",
+      statusRename: "Renamed",
+      statusConflict: "Conflicts",
+      statusFile: "File",
+      statusSelectHint: "Select a file to see its diff.",
+      diffTitle: "Diff",
+      diffSides: "Side",
+      diffSidesWorktree: "Worktree vs index",
+      diffSidesIndex: "Index vs HEAD",
+      diffSidesOid: "Worktree vs commit",
+      diffBinary: "Binary file — no patch is shown.",
+      diffTruncated: "Truncated: {reason}",
+      diffEmpty: "No patch in this diff.",
+      historyTitle: "History",
+      historyCommit: "Commit",
+      historyMore: "Load more",
+      historyFiles: "Files in this commit",
+      historyNoFiles: "This commit has no file changes.",
+      detailTitle: "Commit detail",
+      diagTitle: "Bridge diagnostics",
+      diagShow: "Show",
+      diagHide: "Hide",
+      diagUnavailable: "No live bridge evidence for this Session.",
+      diagExecutable: "Executable",
+      diagExecutableHash: "Executable SHA-256",
+      diagPid: "Child PID",
+      diagProtocol: "Protocol",
+      diagMethods: "Negotiated methods",
+      diagBundleDir: "Bundle package directory",
+      diagBundleEntry: "Bundle entry",
+      diagBundleHash: "Bundle entry SHA-256",
+      diagWorktree: "Worktree id",
+      diagBranch: "Branch",
+      diagHead: "HEAD",
+      diagSessions: "Sessions on this bridge",
+      diagEmptyBranch: "unborn",
     };
     const zh = {
       summaryEmpty: "尚未配置 Libra bridge。",
@@ -46,6 +97,57 @@ globalThis.__ModuleLoader__.load({
       saved: "已保存。二进制和仓库会在下一次 bridge 请求时生效。",
       failed: "无法保存这些设置。",
       unavailable: "当前配置档没有设置服务。请改为在插件配置里填写 libraExecutable。",
+      panelTitle: "Libra",
+      panelGuideTitle: "Libra 版本控制",
+      panelGuideDescription: "本会话的仓库状态、有界 diff、提交历史和 bridge 诊断。",
+      panelLoading: "正在加载…",
+      panelRefresh: "刷新",
+      panelUnbound: "本会话尚未绑定 Libra 仓库。请在 Libra 工作树内的工作目录中打开会话。",
+      panelNotRepository: "本会话的目录不是 Libra 仓库。",
+      panelUnsupported: "当前 Libra 版本不支持本面板所需的只读方法。",
+      panelDisconnected: "该仓库的 Libra bridge 当前不可用。",
+      panelMoved: "本会话已移动到其他工作树。请在目标仓库中重新打开。",
+      panelError: "无法读取该仓库。",
+      panelEmpty: "暂无内容。",
+      statusTitle: "变更",
+      statusStaged: "已暂存",
+      statusUnstaged: "未暂存",
+      statusUntracked: "未跟踪",
+      statusRename: "重命名",
+      statusConflict: "冲突",
+      statusFile: "文件",
+      statusSelectHint: "选择文件以查看 diff。",
+      diffTitle: "Diff",
+      diffSides: "比较侧",
+      diffSidesWorktree: "工作树 vs 索引",
+      diffSidesIndex: "索引 vs HEAD",
+      diffSidesOid: "工作树 vs 提交",
+      diffBinary: "二进制文件，不显示 patch。",
+      diffTruncated: "已截断：{reason}",
+      diffEmpty: "本次 diff 没有 patch。",
+      historyTitle: "历史",
+      historyCommit: "提交",
+      historyMore: "加载更多",
+      historyFiles: "该提交的文件",
+      historyNoFiles: "该提交没有文件变更。",
+      detailTitle: "提交详情",
+      diagTitle: "Bridge 诊断",
+      diagShow: "显示",
+      diagHide: "隐藏",
+      diagUnavailable: "本会话没有运行中的 bridge 证据。",
+      diagExecutable: "可执行文件",
+      diagExecutableHash: "可执行文件 SHA-256",
+      diagPid: "子进程 PID",
+      diagProtocol: "协议",
+      diagMethods: "已协商方法",
+      diagBundleDir: "Bundle 包目录",
+      diagBundleEntry: "Bundle 入口",
+      diagBundleHash: "Bundle 入口 SHA-256",
+      diagWorktree: "工作树 id",
+      diagBranch: "分支",
+      diagHead: "HEAD",
+      diagSessions: "该 bridge 上的会话数",
+      diagEmptyBranch: "unborn",
     };
 
     function fieldStyle() {
@@ -144,8 +246,375 @@ globalThis.__ModuleLoader__.load({
         hint ? h("small", null, t(hint)) : null);
     }
 
+
+    const TAB_ID = "@libra-tools/dsh-bundle/version-control";
+    const TAB_KIND = "libra-version-control";
+    const PANEL_STATUS_GROUPS = [
+      ["conflict", "statusConflict"],
+      ["rename", "statusRename"],
+      ["staged", "statusStaged"],
+      ["unstaged", "statusUnstaged"],
+      ["untracked", "statusUntracked"],
+    ];
+
+    /** Group status entries for display; unknown states stay visible under their raw name. */
+    function groupStatusEntries(entries) {
+      const groups = [];
+      for (const [state, labelKey] of PANEL_STATUS_GROUPS) {
+        const rows = entries.filter((entry) => entry.state === state);
+        if (rows.length > 0) groups.push({ state, labelKey, rows });
+      }
+      const known = new Set(PANEL_STATUS_GROUPS.map(([state]) => state));
+      const rest = entries.filter((entry) => !known.has(entry.state));
+      if (rest.length > 0) groups.push({ state: "other", labelKey: "statusFile", rows: rest });
+      return groups;
+    }
+
+    /** Which comparison sides a status entry's diff names. */
+    function sidesForState(state) {
+      if (state === "staged") return "index-vs-head";
+      if (state === "rename") return "index-vs-head";
+      return "worktree-vs-index";
+    }
+
+    function sidesLabelKey(sides) {
+      if (sides === "index-vs-head") return "diffSidesIndex";
+      if (sides === "worktree-vs-oid") return "diffSidesOid";
+      return "diffSidesWorktree";
+    }
+
+    /** Map a typed Host failure onto the panel's explicit state. */
+    function failureState(result) {
+      if (result === undefined || result.ok !== false) return { state: "ok" };
+      switch (result.error.kind) {
+        case "no_working_directory": return { state: "unbound", key: "panelUnbound" };
+        case "not_a_repository": return { state: "not_repo", key: "panelNotRepository" };
+        case "cwd_changed": return { state: "moved", key: "panelMoved" };
+        case "unsupported_capability":
+        case "protocol_mismatch":
+          return { state: "unsupported", key: "panelUnsupported" };
+        case "bridge_unavailable":
+        case "disconnected":
+          return { state: "disconnected", key: "panelDisconnected" };
+        case "cancelled": return { state: "cancelled", key: "panelLoading" };
+        default: return { state: "error", key: "panelError" };
+      }
+    }
+
+    function mergeHistory(previous, page) {
+      return {
+        commits: previous.commits.concat(page.commits),
+        next: page.cursor.next,
+      };
+    }
+
+    function describeCommit(commit) {
+      return { label: `${commit.oid.slice(0, 8)} ${commit.summary}`, oid: commit.oid };
+    }
+
+    function describeEvidence(evidence) {
+      if (evidence === undefined || evidence.ok !== true) return { available: false };
+      const data = evidence.data;
+      return {
+        available: true,
+        worktreeId: data.identity.worktreeId,
+        branch: data.identity.branch,
+        head: data.identity.headOid,
+        unborn: data.identity.unborn,
+        bindingKey: data.bindingKey,
+        sessionCount: data.sessionCount,
+        executable: data.evidence.executable,
+        executableSha256: data.evidence.executableSha256,
+        childPid: data.evidence.childPid,
+        protocol: `${data.evidence.initialize.protocol.major}.${data.evidence.initialize.protocol.minor}`,
+        methods: data.evidence.initialize.methods,
+        bundlePackageDir: data.evidence.bundlePackageDir,
+        bundleEntryPath: data.evidence.bundleEntryPath,
+        bundleEntrySha256: data.evidence.bundleEntrySha256,
+      };
+    }
+
+    function panelButton(label, onClick, disabled) {
+      return h("button", {
+        type: "button",
+        onClick,
+        disabled: disabled === true,
+        style: {
+          font: "inherit", color: "inherit", background: "transparent",
+          border: "1px solid currentColor", borderRadius: 4, padding: "2px 8px", cursor: "pointer",
+        },
+      }, label);
+    }
+
+    function sectionHeading(title) {
+      return h("h3", { style: { margin: "12px 0 6px", fontSize: "1em" } }, title);
+    }
+
+    function statusGroupRow(group, selected, onOpen, t) {
+      const items = group.rows.map((entry) => h("li", { key: `${entry.state}:${entry.path}` },
+        h("button", {
+          type: "button",
+          onClick: () => onOpen(entry),
+          "aria-pressed": selected !== null && selected.path === entry.path,
+          style: {
+            font: "inherit", color: "inherit", background: "transparent", border: "none",
+            padding: 0, cursor: "pointer", textAlign: "start",
+          },
+        }, entry.oldPath === null || entry.oldPath === undefined
+          ? entry.path
+          : `${entry.oldPath} → ${entry.path}`)));
+      return h("div", { key: group.state },
+        h("div", { style: { opacity: 0.8 } }, `${t(group.labelKey)} (${group.rows.length})`),
+        h("ul", { style: { margin: "2px 0 0", paddingInlineStart: 16 } }, items));
+    }
+
+    function diffSection(diff, t) {
+      if (diff === null) return null;
+      const file = diff.files.length > 0 ? diff.files[0] : null;
+      let body;
+      if (file === null) {
+        body = h("p", null, t("diffEmpty"));
+      } else {
+        const patch = file.patch === null
+          ? h("p", null, file.truncation === "binary" ? t("diffBinary") : t("diffEmpty"))
+          : h("pre", { style: { whiteSpace: "pre-wrap", overflowX: "auto", margin: 0 } }, file.patch);
+        const notice = file.truncated
+          ? h("p", { role: "note" }, t("diffTruncated", { reason: file.truncation }))
+          : null;
+        body = h("div", null,
+          h("div", { style: { fontFamily: "monospace" } }, file.path),
+          patch,
+          notice);
+      }
+      return h("div", null,
+        sectionHeading(t("diffTitle")),
+        h("div", { style: { opacity: 0.8 } }, `${t("diffSides")}: ${t(sidesLabelKey(diff.sides))}`),
+        body);
+    }
+
+    function historySection(history, detail, t, onMore, onCommit) {
+      const commitItems = history.commits.map((commit) => h("li", { key: commit.oid },
+        h("button", {
+          type: "button",
+          onClick: () => onCommit(commit.oid),
+          style: {
+            font: "inherit", color: "inherit", background: "transparent",
+            border: "none", padding: 0, cursor: "pointer", textAlign: "start",
+          },
+        }, describeCommit(commit).label)));
+      const list = history.commits.length === 0
+        ? h("p", null, t("panelEmpty"))
+        : h("ul", { style: { margin: 0, paddingInlineStart: 16 } }, commitItems);
+      const more = history.next === null
+        ? null
+        : panelButton(t("historyMore"), () => onMore(history.next), history.loading);
+      let detailBody = null;
+      if (detail !== null) {
+        const files = detail.files.map((file) => h("li", { key: `${file.state}:${file.path}` },
+          file.oldPath === null ? file.path : `${file.oldPath} → ${file.path}`));
+        detailBody = h("div", { style: { marginTop: 8 } },
+          sectionHeading(t("detailTitle")),
+          h("div", { style: { fontFamily: "monospace" } }, detail.oid),
+          h("div", null, detail.summary),
+          detail.files.length === 0
+            ? h("p", null, t("historyNoFiles"))
+            : h("ul", { style: { margin: "4px 0 0", paddingInlineStart: 16 } }, files));
+      }
+      return h("div", null, sectionHeading(t("historyTitle")), list, more, detailBody);
+    }
+
+    function diagnosticsSection(diagnostics, expanded, t, onToggle) {
+      const rows = diagnostics.available === false ? [] : [
+        [t("diagExecutable"), diagnostics.executable],
+        [t("diagExecutableHash"), diagnostics.executableSha256],
+        [t("diagPid"), String(diagnostics.childPid ?? "—")],
+        [t("diagProtocol"), diagnostics.protocol],
+        [t("diagMethods"), diagnostics.methods.join(", ")],
+        [t("diagBundleDir"), diagnostics.bundlePackageDir],
+        [t("diagBundleEntry"), diagnostics.bundleEntryPath],
+        [t("diagBundleHash"), diagnostics.bundleEntrySha256],
+        [t("diagWorktree"), diagnostics.worktreeId],
+        [t("diagBranch"), diagnostics.unborn ? t("diagEmptyBranch") : String(diagnostics.branch ?? "—")],
+        [t("diagHead"), diagnostics.head ?? "—"],
+        [t("diagSessions"), String(diagnostics.sessionCount)],
+      ];
+      let body = null;
+      if (expanded) {
+        const pairs = rows.map(([label, value]) => h("div", {
+          key: label,
+          style: { display: "contents" },
+        },
+        h("dt", null, label),
+        h("dd", { style: { margin: 0, overflowWrap: "anywhere" } }, value)));
+        body = diagnostics.available === false
+          ? h("p", null, t("diagUnavailable"))
+          : h("dl", {
+            style: {
+              margin: "6px 0 0", display: "grid", gridTemplateColumns: "minmax(120px, auto) 1fr",
+              gap: 4, fontFamily: "monospace", fontSize: "0.85em",
+            },
+          }, pairs);
+      }
+      return h("div", null,
+        sectionHeading(t("diagTitle")),
+        panelButton(expanded ? t("diagHide") : t("diagShow"), onToggle),
+        body);
+    }
+
+    function LibraPanel(props) {
+      const t = props.t;
+      const libra = props.libra;
+      const evidenceClient = props.evidence;
+      const tab = props.useTabInfo();
+      const [state, setState] = React.useState({ phase: "loading" });
+      const [status, setStatus] = React.useState(null);
+      const [history, setHistory] = React.useState({ commits: [], next: null, loading: false });
+      const [selected, setSelected] = React.useState(null);
+      const [diff, setDiff] = React.useState(null);
+      const [detail, setDetail] = React.useState(null);
+      const [diagnostics, setDiagnostics] = React.useState({ available: false });
+      const [expanded, setExpanded] = React.useState(false);
+      const generation = React.useRef(0);
+      const inFlight = React.useRef(null);
+
+      const cancelInFlight = () => {
+        if (inFlight.current !== null) inFlight.current.abort();
+        inFlight.current = null;
+      };
+
+      const request = (call) => {
+        cancelInFlight();
+        generation.current += 1;
+        const sequence = generation.current;
+        const controller = new globalThis.AbortController();
+        inFlight.current = controller;
+        const abortFromTab = () => controller.abort();
+        if (tab.tab.signal.aborted) controller.abort();
+        else tab.tab.signal.addEventListener("abort", abortFromTab, { once: true });
+        return Promise.resolve()
+          .then(() => call(controller.signal, `panel-${sequence}`))
+          .then(
+            (result) => (sequence === generation.current ? result : { stale: true }),
+            (error) => {
+              if (sequence !== generation.current || controller.signal.aborted) return { cancelled: true };
+              return { ok: false, error: { kind: "internal", message: String(error) } };
+            },
+          );
+      };
+
+      const loadStatus = () => request((signal, requestId) => libra.call("status", {}, requestId, signal))
+        .then((result) => {
+          if (result.stale === true || result.cancelled === true) return;
+          const view = failureState(result);
+          setState(view);
+          if (view.state === "ok") setStatus(result.data);
+        });
+
+      const loadHistory = (cursor) => {
+        setHistory((current) => ({ ...current, loading: true }));
+        return request((signal, requestId) => libra.call("log", cursor === null ? {} : { cursor }, requestId, signal))
+          .then((result) => {
+            if (result.stale === true || result.cancelled === true) return;
+            const view = failureState(result);
+            if (view.state !== "ok") { setState(view); return; }
+            setHistory((current) => ({
+              ...(cursor === null ? { commits: [], next: null } : current),
+              ...mergeHistory(cursor === null ? { commits: [], next: null } : current, result.data),
+              loading: false,
+            }));
+          });
+      };
+
+      const loadDiagnostics = () => Promise.resolve()
+        .then(() => evidenceClient.session())
+        .then((result) => setDiagnostics(describeEvidence(result)))
+        .catch(() => setDiagnostics({ available: false }));
+
+      const refresh = () => {
+        setState({ phase: "loading" });
+        setDiff(null);
+        setDetail(null);
+        loadStatus();
+        loadHistory(null);
+        loadDiagnostics();
+      };
+
+      React.useEffect(() => {
+        refresh();
+        const release = tab.tab.actions.bindCommands({ refresh });
+        return () => { release(); cancelInFlight(); };
+      }, []);
+
+      React.useEffect(() => {
+        if (!tab.tab.visible) cancelInFlight();
+      }, [tab.tab.visible]);
+
+      const openDiff = (entry) => {
+        const sides = sidesForState(entry.state);
+        setSelected({ path: entry.path, state: entry.state, sides });
+        setDiff(null);
+        request((signal, requestId) => libra.call("diff", { sides, paths: [entry.path], limit: 1 }, requestId, signal))
+          .then((result) => {
+            if (result.stale === true || result.cancelled === true) return;
+            const view = failureState(result);
+            if (view.state !== "ok") { setState(view); return; }
+            setDiff(result.data);
+          });
+      };
+
+      const openCommit = (oid) => {
+        setDetail(null);
+        request((signal, requestId) => libra.call("show", { oid, limit: 20 }, requestId, signal))
+          .then((result) => {
+            if (result.stale === true || result.cancelled === true) return;
+            const view = failureState(result);
+            if (view.state !== "ok") { setState(view); return; }
+            setDetail(result.data);
+          });
+      };
+
+      const banner = state.state !== "ok" && state.state !== "loading"
+        ? h("p", { role: "status", style: { margin: "8px 0" } }, t(state.key ?? "panelError"))
+        : state.state === "loading" ? h("p", { role: "status" }, t("panelLoading")) : null;
+      const groups = groupStatusEntries(status === null ? [] : status.entries);
+
+      return h("section", { style: { display: "flex", flexDirection: "column", gap: 6, font: "inherit", color: "inherit" } },
+        h("header", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
+          h("strong", null, t("panelTitle")),
+          panelButton(t("panelRefresh"), refresh, state.state === "loading")),
+        banner,
+        state.state === "ok" ? sectionHeading(t("statusTitle")) : null,
+        state.state === "ok" && groups.length === 0 ? h("p", null, t("panelEmpty")) : null,
+        state.state === "ok" ? h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+          groups.map((group) => statusGroupRow(group, selected, openDiff, t)),
+          selected === null ? h("p", { style: { opacity: 0.8 } }, t("statusSelectHint")) : null) : null,
+        diffSection(diff, t),
+        state.state === "ok" ? historySection(history, detail, t, loadHistory, openCommit) : null,
+        diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }));
+    }
+
+    function LibraTitle(props) {
+      return props.t("panelTitle");
+    }
+
+    function remoteCaller(remote, sessionId) {
+      return {
+        call(method, params, requestId, signal) {
+          return remote.libraVcs[method](sessionId, params, requestId, signal);
+        },
+      };
+    }
+
+    function evidenceCaller(remote, sessionId) {
+      return {
+        session() {
+          return remote.libraEvidence.session(sessionId);
+        },
+      };
+    }
+
     return {
-      inject: ["slots", "locale", "configForms"],
+      inject: ["slots", "locale", "configForms", "remote", "sidebarRightTabs"],
       apply(ctx) {
         const t = ctx.locale.bind(NS);
         ctx.effect(() => ctx.locale.register(NS, { en, zh }), "libra-settings: dictionaries");
@@ -156,6 +625,44 @@ globalThis.__ModuleLoader__.load({
         }, function LibraSettings(props) {
           return h(Settings, { ...props, formApi: form, t });
         })), "libra-settings: page");
+        // A page type: it recognizes no resource address and is opened by kind
+        // from the guide. The body distinguishes bound/unbound Sessions itself.
+        ctx.effect(() => ctx.sidebarRightTabs.register({
+          id: TAB_ID,
+          kind: TAB_KIND,
+          title: () => t("panelTitle"),
+          guide: [{
+            id: "version-control",
+            order: 100,
+            title: () => t("panelGuideTitle"),
+            description: () => t("panelGuideDescription"),
+          }],
+        }), "libra-version-control: tab type");
+        ctx.effect(() => ctx.slots.inject("sidebar.right.pane.tab", () => ctx.slots.register({
+          name: "sidebar.right.pane.tab",
+          key: TAB_ID,
+          locale: NS,
+          inject: (sessionId) => ({
+            libra: remoteCaller(ctx.remote, sessionId),
+            evidence: evidenceCaller(ctx.remote, sessionId),
+          }),
+        }, LibraPanel)), "libra-version-control: panel body");
+        ctx.effect(() => ctx.slots.register({
+          name: "sidebar.right.pane.tab.title",
+          key: TAB_ID,
+          locale: NS,
+        }, LibraTitle), "libra-version-control: panel title");
+      },
+      internal: {
+        TAB_ID,
+        TAB_KIND,
+        groupStatusEntries,
+        sidesForState,
+        sidesLabelKey,
+        failureState,
+        mergeHistory,
+        describeCommit,
+        describeEvidence,
       },
     };
   },

@@ -13,6 +13,7 @@ from the DSH compatibility gate.
 | DeepSeek Harness | `0.2.2-rc.3` (`dsh-v0.2.2-rc.3`) | `engines.dsh: ^0.2.2-rc.3`; isolated installed-runtime offline Memory test passed |
 | Bundle | `@libra-tools/dsh-bundle@0.2.0` | local build; 139 tests passed, 5 skipped; typecheck, lint and build passed |
 | Session repository binding | Host `workingDirectory.get(session)` + Libra `vcs.identity` | one bridge per canonical worktree; cwd change fails closed; `libraBridgeEvidence` reports each binding's executable, PID, `initialize` and bundle entry hashes |
+| Read-only panel | `sidebar.right.pane.tab` keyed `@libra-tools/dsh-bundle/version-control`; `libraVcs` + `libraEvidence` Remote namespaces | page-type Libra tab; session-scoped rows/diff/history; bridge diagnostics from the Host record; explicit unbound/unsupported/disconnected states |
 | Typed VCS reads | `vcs.status` / `vcs.diff` / `vcs.log` / `vcs.show` (protocol minor 2) | shared by the `libraVcsRead` Host service and `libra_vcs_*` tools; bounded cursors, one diff side selector, distinct `unsupported_capability` / disconnected / cursor / scope / stale errors |
 
 The workspace also contains context, session, tools, UI and workspace packages. The new local Memory implementation is a separate development change and has not yet received a signed compatibility receipt. A negotiated Memory capability does not establish that Episode capture is enabled.

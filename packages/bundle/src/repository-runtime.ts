@@ -24,6 +24,7 @@ import {
   type ResolvedDeployment,
 } from "./deployment.js";
 import { invokeVcsReadTool, LibraVcsReadService, VcsHostError } from "./vcs-read.js";
+import { LibraEvidenceRemote } from "./evidence-remote.js";
 import { LibraVcsRemote } from "./vcs-remote.js";
 import { libraMemoryProjection } from "./memory-projection.js";
 import {
@@ -631,6 +632,40 @@ export async function applyPerSession(
   // resource, so DSH checks the caller's session-level access policy.
   new LibraVcsRemote(ctx, vcsReadService, (sessionId) =>
     ctx.sessions.list().find((candidate) => String(candidate.id) === sessionId));
+
+  new LibraEvidenceRemote(ctx, (sessionId) => {
+    const record = registry.sessionBindingRecord(sessionId);
+    const binding = record === undefined
+      ? undefined
+      : registry.liveBindings().find((candidate) => candidate.key === record.key);
+    if (record === undefined || binding === undefined) {
+      const failure = bindingFailures.get(sessionId);
+      return {
+        ok: false,
+        error: {
+          kind: failure?.kind ?? "no_working_directory",
+          message: "this Session is not bound to a live Libra repository",
+        },
+      };
+    }
+    return {
+      ok: true,
+      data: {
+        identity: { ...binding.identity },
+        bindingKey: binding.key,
+        sessionCount: binding.refs,
+        evidence: {
+          executable: binding.evidence.executable,
+          executableSha256: binding.evidence.executableSha256,
+          childPid: binding.evidence.childPid,
+          initialize: binding.evidence.initialize,
+          bundlePackageDir: binding.evidence.bundlePackageDir,
+          bundleEntryPath: binding.evidence.bundleEntryPath,
+          bundleEntrySha256: binding.evidence.bundleEntrySha256,
+        },
+      },
+    };
+  });
 
   const bindingService: LibraRepositoryBindingService = {
     rebind: async (value) => {

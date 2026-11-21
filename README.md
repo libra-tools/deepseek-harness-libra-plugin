@@ -152,6 +152,17 @@ All tools map to contract methods only—no wildcard bridge access.
 | `libra_vcs_log` | `vcs.log` | read | allowed |
 | `libra_vcs_show` | `vcs.show` | read | allowed |
 
+### Read-only Libra panel
+
+The bundle contributes a `Libra` page tab to the right sidebar (`libra-version-control`). Open it from the sidebar guide; it is session-scoped and shows, for the active Session's bound repository:
+
+- change groups (staged, unstaged, untracked, renamed, conflicts) with counts and bounded diffs that name their comparison sides;
+- commit history with cursor pagination and per-commit file detail;
+- a diagnostics area with the live bridge evidence the Host recorded: executable path and SHA-256, child PID, negotiated protocol and method list, bundle package directory, bundle entry path and SHA-256;
+- explicit loading, empty, unbound, not-a-repository, unsupported-capability, disconnected and moved states instead of an empty repository.
+
+The panel reads through the `libraVcs` Remote namespace and the `libraEvidence` diagnostics namespace; it never selects a repository, revision range or absolute path. A refresh cancels its stale page and the panel keeps working while the sidebar is collapsed or the Session is hidden.
+
 ### Typed VCS reads
 
 The four `libra_vcs_*` tools and the Host `libraVcsRead` service share one implementation over the typed methods frozen by LVC-02:
