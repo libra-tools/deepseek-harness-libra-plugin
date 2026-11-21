@@ -101,7 +101,7 @@ function registry(
   FakeClient.created = [];
   const created = FakeClient.created;
   const instance = new RepositoryRegistry({
-    executable: process.execPath,
+    resolveExecutable: async () => process.execPath,
     loadedModule: process.execPath,
     createClient: (cwd) => {
       const known = identities.get(cwd);

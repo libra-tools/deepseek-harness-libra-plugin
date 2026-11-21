@@ -68,9 +68,13 @@ export interface WorkingDirectoryService {
 
 /** Factories the bundle wires in; tests replace them. */
 export interface RepositoryRegistryOptions {
-  executable: string;
-  /** Create a connected-enough client for one worktree; the registry connects it. */
-  createClient: (cwd: string) => BridgeClient;
+  /**
+   * Resolve the bridge executable. Deployment settings are volatile, so the
+   * path and its hash are read when a binding is created, not once at load.
+   */
+  resolveExecutable: () => Promise<string>;
+  /** Create a client for one worktree; the registry connects and identifies it. */
+  createClient: (cwd: string) => BridgeClient | Promise<BridgeClient>;
   /** The entry file of the loaded plugin, for the bundle evidence. */
   loadedModule?: string;
 }
@@ -246,7 +250,7 @@ export class RepositoryRegistry {
     | { ok: true; identity: RepositoryIdentity; client: BridgeClient; evidence: BridgeEvidence }
     | { ok: false; failure: BindingFailure }
   > {
-    const client = this.options.createClient(cwd);
+    const client = await this.options.createClient(cwd);
     let initialize: InitializeResult;
     try {
       initialize = await client.connect();
@@ -271,9 +275,10 @@ export class RepositoryRegistry {
       return { ok: false, failure: { kind: "not_a_repository", sessionId, cwd } };
     }
     this.loadedModuleSha256 ??= fileSha256(this.loadedModule).catch(() => "");
+    const executable = await this.options.resolveExecutable().catch(() => "");
     const evidence: BridgeEvidence = {
-      executable: this.options.executable,
-      executableSha256: await fileSha256(this.options.executable).catch(() => ""),
+      executable,
+      executableSha256: executable === "" ? "" : await fileSha256(executable).catch(() => ""),
       childPid: client.childPid,
       initialize,
       loadedModule: this.loadedModule,
