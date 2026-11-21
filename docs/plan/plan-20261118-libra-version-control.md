@@ -688,7 +688,7 @@ Sixteen read-only Codex review rounds closed 30 P1 findings; round 16 returned `
 
 **Deliverables:** Host mutation service, UI remote action, Agent tool schemas and parity tests.
 
-**Implementation write set:** `deepseek-harness-libra-plugin: packages/bundle/src/index.ts; packages/bundle/src/vcs-write.ts (new); packages/tools/src/facade.ts; packages/tools/src/vcs-write.ts (new); packages/bundle/client.js (add matching en/zh action keys to the existing dictionaries); packages/bundle/client/version-control-actions.js (new; tab/remote contract per LVC-01; no user-visible string literals); tests/tools/vcs-write-tools.test.ts (new); tests/ui/vcs-user-actions.test.ts (new); tests/bundle/vcs-write-service.test.ts (new); README.md; docs/tools.md; docs/ui.md; docs/security.md; docs/compatibility.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (stage/commit and approval sections; source only, no deploy before REL-03)`. Do not edit the protocol schema or Libra sources in this card.
+**Implementation write set:** `deepseek-harness-libra-plugin: packages/bundle/src/index.ts; packages/bundle/src/vcs-write.ts (new); packages/bundle/src/repository-runtime.ts (compose the write service/Remote with the same per-Session binding resolver as the read service); packages/tools/src/facade.ts; packages/tools/src/vcs-write.ts (new); packages/bundle/client.js (add matching en/zh action keys to the existing dictionaries and the stage/unstage/commit UI; the Client loader ships one module per bundle, so action logic lives in client.js and is exposed through its test `internal` surface); tests/tools/vcs-write-tools.test.ts (new); tests/ui/vcs-user-actions.test.ts (new); tests/bundle/vcs-write-service.test.ts (new); README.md; docs/tools.md; docs/ui.md; docs/security.md; docs/compatibility.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (stage/commit and approval sections; source only, no deploy before REL-03)`. Do not edit the protocol schema or Libra sources in this card.
 
 **Release write set:** `Inherited from REL-02`。
 
@@ -714,7 +714,7 @@ Sixteen read-only Codex review rounds closed 30 P1 findings; round 16 returned `
 
 **Split/dependency notes:** UI button operation is user-intent, not authority delegation; only Agent writes pass through approval.
 
-**修订历史:** 2026-11-22 开工；依赖 DEP-03/05/06/10 均已交付，开始实现共享 Host 变更服务、UI action 与 Agent 工具。
+**修订历史:** 2026-11-22 开工；依赖 DEP-03/05/06/10 均已交付。开工修订：Client loader 每个 bundle 只加载 `client.js`，`packages/bundle/client/version-control-actions.js` 不在打包清单内且无法被运行时加载，因此动作逻辑改放在 `client.js` 并通过测试 `internal` 面暴露；同时把 `packages/bundle/src/repository-runtime.ts` 列入写集，用于把写服务/Remote 与读服务共用同一 Session 绑定解析器。主实现文件数仍为 6。
 
 ### Task LVC-08: Show truthful Agent capture, checkpoint and commit linkage
 
@@ -899,7 +899,7 @@ Sixteen read-only Codex review rounds closed 30 P1 findings; round 16 returned `
 | LVC-04 | implementation | Host read API | 6 primary | plugin runtime + ER-06 docs/backend guide; schema frozen | revert | REL-02 | LVC-03 | none |
 | LVC-05 | implementation | Read-only Client panel | 3 primary | plugin client + ER-06 docs/backend guide | revert | REL-02 | LVC-04 | none |
 | LVC-06 | implementation | Typed bridge mutations | 4 primary | libra bridge sources + plugin schema/receiver | forward-only/revert pre-release | REL-01 | none | none |
-| LVC-07 | implementation | Shared UI/tool mutations | 6 primary | plugin runtime + ER-06 docs/backend guide | revert | REL-02 | LVC-06 | none |
+| LVC-07 | implementation | Shared UI/tool mutations | 6 primary | plugin runtime + ER-06 docs/backend guide | revert | REL-02 | LVC-06 | runtime composition added in place of the unusable separate Client action file |
 | LVC-08 | implementation | Capture status projection | 6 primary | plugin only; Libra edit requires a new card | revert | REL-02 | LVC-03/07 | none |
 | LVC-09 | docs | Published docs | ≤20 | all three by explicit list | revert | REL-03 | all feature cards | none |
 
