@@ -169,7 +169,8 @@ interface DeferredCall {
   reject: (error: unknown) => void;
 }
 
-function remoteHarness() {
+function remoteHarness(options: { cooperativeAborts?: boolean } = {}) {
+  const cooperative = options.cooperativeAborts !== false;
   const calls: DeferredCall[] = [];
   const pending = new Map<string, DeferredCall[]>();
   const deferred = (method: DeferredCall["method"]) => (
@@ -183,7 +184,7 @@ function remoteHarness() {
     const queue = pending.get(method) ?? [];
     queue.push(call);
     pending.set(method, queue);
-    signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+    if (cooperative) signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
   });
   const libra = { call: (method: DeferredCall["method"], params: Record<string, unknown>, requestId: string, signal: AbortSignal) => {
     switch (method) {
@@ -600,6 +601,69 @@ describe("Libra panel component flows", () => {
     reopen!();
     await tick();
     expect(evidence.pendingCount()).toBe(0);
+    panel.unmount();
+  });
+
+  it("refuses a late fulfilled result that a refresh superseded", async () => {
+    const tracker = remoteHarness({ cooperativeAborts: false });
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    const firstStatus = tracker.take("status");
+    const firstLog = tracker.take("log");
+
+    tabState.commands[0]!.refresh!();
+    await tick();
+    expect(firstStatus.signal.aborted).toBe(true);
+    tracker.take("status").resolve(statusPage([{ path: "new.ts", state: "staged" }]));
+    tracker.take("log").resolve(logPage("new"));
+    await panel.settle();
+
+    // The superseded promise settles only now; it must not repaint.
+    firstStatus.resolve(statusPage([{ path: "late.ts", state: "staged" }]));
+    firstLog.resolve(logPage("late"));
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("new.ts");
+    expect(textOf(panel.tree)).not.toContain("late.ts");
+    expect(textOf(panel.tree)).not.toContain("aaaaaaaa late");
+    panel.unmount();
+  });
+
+  it("pages commit files instead of silently truncating the list", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve(logPage("first"));
+    await panel.settle();
+
+    const commit = button(panel.tree, "aaaaaaaa first");
+    commit!();
+    await tick();
+    tracker.take("show").resolve({
+      ok: true,
+      data: {
+        oid: "a".repeat(40), summary: "first", parents: [],
+        files: [{ path: "one.ts", state: "staged", oldPath: null }],
+        cursor: { next: "20" },
+      },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("one.ts");
+    const moreFiles = button(panel.tree, "t:detailMore");
+    expect(moreFiles).toBeDefined();
+    moreFiles!();
+    await tick();
+    tracker.take("show").resolve({
+      ok: true,
+      data: {
+        oid: "a".repeat(40), summary: "first", parents: [],
+        files: [{ path: "two.ts", state: "staged", oldPath: null }],
+        cursor: { next: null },
+      },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("two.ts");
+    expect(textOf(panel.tree)).not.toContain("t:detailMore");
     panel.unmount();
   });
 

@@ -38,6 +38,8 @@ interface Harness {
   execute: (name: string, session: TestSession) => Promise<unknown>;
   warnings: string[];
   evidence: () => LibraBridgeEvidenceService;
+  service: (name: string) => unknown;
+  register: (session: TestSession) => void;
   binding: () => LibraRepositoryBindingService;
 }
 
@@ -46,12 +48,13 @@ function makeHarness(directories: Map<string, string>): Harness {
   const warnings: string[] = [];
   const services = new Map<string, unknown>();
   const definitions: Array<{ name: string; execute: (args: Record<string, unknown>, exec: unknown) => Promise<unknown> }> = [];
+  const liveSessions = new Set<TestSession>();
   const tools = { register: (definition: unknown) => {
     definitions.push(definition as never);
     return () => undefined;
   } };
   const ctx = {
-    sessions: { list: () => [] },
+    sessions: { list: () => [...liveSessions] },
     logger: { warn: (message: string) => warnings.push(message) },
     get: (name: string) => {
       if (name === "workingDirectory") {
@@ -108,6 +111,8 @@ function makeHarness(directories: Map<string, string>): Harness {
       });
     },
     evidence: () => services.get("libraBridgeEvidence") as LibraBridgeEvidenceService,
+    service: (name) => services.get(name),
+    register: (session) => { liveSessions.add(session); },
     binding: () => services.get("libraRepositoryBinding") as LibraRepositoryBindingService,
   };
 }
@@ -510,6 +515,41 @@ describe("Host session-to-repository pool", () => {
     await harness.emit("session/created", one);
     expect(harness.evidence().bindings()).toHaveLength(1);
     expect(queuedFiles(namespaces()[0]!)).toHaveLength(1);
+  }, 60_000);
+
+  it("serves live bridge evidence only while the Session binding matches", async () => {
+    const first = fixtureRoot("evidence-a");
+    const second = fixtureRoot("evidence-b");
+    const plain = mkdtempSync(join(tmpdir(), "libra-evidence-plain-"));
+    roots = [first, second, plain];
+    const directories = new Map([["s-1", first]]);
+    const harness = await start(directories);
+    const one = session("s-1");
+
+    harness.register(one);
+    await harness.emit("session/created", one);
+    const remote = harness.service("libraEvidence") as { session: (id: string) => unknown };
+
+    const bound = remote.session("s-1") as { ok: boolean; data?: { identity: { worktreeId: string }; evidence: { executableSha256: string } } };
+    expect(bound.ok).toBe(true);
+    expect(bound.data?.identity.worktreeId).toMatch(/^wt-/);
+    expect(bound.data?.evidence.executableSha256).toMatch(/^[a-f0-9]{64}$/);
+
+    // The Host directory moves but the Session is not rebound: the recorded
+    // binding no longer describes the Session, so its evidence is refused.
+    directories.set("s-1", second);
+    expect((remote.session("s-1") as { ok: boolean; error?: { kind: string } })).toMatchObject({
+      ok: false,
+      error: { kind: "cwd_changed" },
+    });
+
+    // A non-repository move records a binding failure; evidence reports it
+    // instead of the old repository's record.
+    directories.set("s-1", plain);
+    await harness.execute("libra_vcs_status", one).catch(() => undefined);
+    const failed = remote.session("s-1") as { ok: boolean; error?: { kind: string } };
+    expect(failed.ok).toBe(false);
+    expect(failed.error?.kind).toMatch(/^(cwd_changed|not_a_repository|bridge_unavailable)$/);
   }, 60_000);
 
   it("runs a typed VCS read tool through the Host service", async () => {

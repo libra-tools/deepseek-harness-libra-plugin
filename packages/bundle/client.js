@@ -59,6 +59,7 @@ globalThis.__ModuleLoader__.load({
       historyMore: "Load more",
       historyFiles: "Files in this commit",
       historyNoFiles: "This commit has no file changes.",
+      detailMore: "Load more files",
       detailTitle: "Commit detail",
       diagTitle: "Bridge diagnostics",
       diagShow: "Show",
@@ -132,6 +133,7 @@ globalThis.__ModuleLoader__.load({
       historyMore: "加载更多",
       historyFiles: "该提交的文件",
       historyNoFiles: "该提交没有文件变更。",
+      detailMore: "加载更多文件",
       detailTitle: "提交详情",
       diagTitle: "Bridge 诊断",
       diagShow: "显示",
@@ -394,7 +396,7 @@ globalThis.__ModuleLoader__.load({
         body);
     }
 
-    function historySection(history, detail, t, onMore, onCommit) {
+    function historySection(history, detail, t, onMore, onCommit, onMoreFiles) {
       const commitItems = history.commits.map((commit) => h("li", { key: commit.oid },
         h("button", {
           type: "button",
@@ -410,6 +412,9 @@ globalThis.__ModuleLoader__.load({
       const more = history.next === null
         ? null
         : panelButton(t("historyMore"), () => onMore(history.next), history.loading);
+      const moreFiles = detail === null || detail.next === null
+        ? null
+        : panelButton(t("detailMore"), () => onMoreFiles(detail.next), false);
       let detailBody = null;
       if (detail !== null) {
         const files = detail.files.map((file) => h("li", { key: `${file.state}:${file.path}` },
@@ -422,7 +427,7 @@ globalThis.__ModuleLoader__.load({
             ? h("p", null, t("historyNoFiles"))
             : h("ul", { style: { margin: "4px 0 0", paddingInlineStart: 16 } }, files));
       }
-      return h("div", null, sectionHeading(t("historyTitle")), list, more, detailBody);
+      return h("div", null, sectionHeading(t("historyTitle")), list, more, detailBody, moreFiles);
     }
 
     function diagnosticsSection(diagnostics, expanded, t, onToggle) {
@@ -634,7 +639,30 @@ globalThis.__ModuleLoader__.load({
             const view = failureState(result);
             if (view.state !== "ok") { setDetail(null); fail(view, "detail"); return; }
             succeed("detail");
-            setDetail(result.data);
+            setDetail({
+              oid: result.data.oid,
+              summary: result.data.summary,
+              files: result.data.files,
+              next: result.data.cursor.next,
+              loading: false,
+            });
+          });
+      };
+      const loadDetailMore = (cursor) => {
+        if (detail === null) return;
+        setDetail({ ...detail, loading: true });
+        run("detailMore", (signal, requestId) => libra.call("show", { oid: detail.oid, cursor, limit: 20 }, requestId, signal))
+          .then((result) => {
+            if (result.stale === true || result.cancelled === true) return;
+            const view = failureState(result);
+            if (view.state !== "ok") { fail(view, "detailMore"); return; }
+            succeed("detailMore");
+            setDetail((current) => current === null ? current : ({
+              ...current,
+              files: current.files.concat(result.data.files),
+              next: result.data.cursor.next,
+              loading: false,
+            }));
           });
       };
 
@@ -660,7 +688,7 @@ globalThis.__ModuleLoader__.load({
         binding !== null ? null : h("div", null,
           sectionHeading(t("historyTitle")),
           errors.history !== undefined ? h("p", { role: "status" }, t(errors.history)) : null,
-          history.commits.length === 0 ? h("p", null, t("panelEmpty")) : historySection(history, detail, t, loadHistory, openCommit)),
+          history.commits.length === 0 ? h("p", null, t("panelEmpty")) : historySection(history, detail, t, loadHistory, openCommit, loadDetailMore)),
         errors.detail !== undefined ? h("p", { role: "status" }, t(errors.detail)) : null,
         diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }));
     }
