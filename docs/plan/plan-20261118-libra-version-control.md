@@ -215,6 +215,17 @@
 | Phase 3 — plugin writes and capture | LVC-07, then LVC-08. LVC-07 UI acceptance uses a new candidate pack of that card's tree plus the same REL-01 binary. | stale state does not mutate; repeat operation is idempotent; Agent writes require approval; pending/rejected/gap/unknown stay distinct. |
 | Phase 4 — package and site publish | After LVC-08 is locally accepted, pack REL-02 with `node scripts/pack-bundle.mjs --destination …` from that commit, then LVC-09 publishes the website. | Published tarball `package/dist/index.js` matches the running Desktop bundle; Cloudflare deploy and live routes are verified. |
 
+## REL-01 发布证据
+
+| 项 | 证据 |
+|---|---|
+| Libra 提交 | `17b6745af530a9df01e37e31e6845a00064c2f75`（`main`，LVC-06 的写方法提交；含 `PROTOCOL_MINOR` 2 与 28 方法 allowlist） |
+| 版本 | `0.30.251`；`Cargo.toml`、`install.sh` `DEFAULT_VERSION`、`install.ps1` `$DefaultVersion` 三处一致 |
+| 发布标签 | 轻量标签 `v0.30.251` 指向 `17b6745`，已推送 `refs/tags/v0.30.251`，由 `.github/workflows/release.yml` 构建并发布签名稳定的 manifest |
+| 二进制版本行 | `libra 0.30.251` |
+| 二进制 SHA-256 | `6fdb3ca37a8a17ccc4f81979b7f17969b8afc0ceab7864c12cfc73d452a338a5`（`cargo build --release` 产物 `target/release/libra`，123,079,344 字节，macOS arm64） |
+| 后续卡使用方式 | LVC-03/LVC-04/LVC-05/LVC-07 的候选包验收把 `libraExecutable` 指向该二进制，并核对其 `libra --version` 行与 SHA-256 与本表一致 |
+
 ## 依赖登记表
 
 | DEP-ID | 提供方 | 消费方 | 产物 | 状态 |
@@ -228,7 +239,7 @@
 | DEP-07 | LVC-07 | LVC-08 | shared UI/Agent mutation service | planned |
 | DEP-08 | LVC-08 | LVC-09 | capture status projection and verified linkage contract | planned |
 | DEP-09 | Libra release point | plugin release point | released bridge artifact + exact handshake compatibility evidence | planned |
-| DEP-10 | LVC-06 | LVC-03, LVC-04, LVC-05, LVC-07 | G-07 serial edge after the shared schema/protocol files are frozen, plus the REL-01 binary SHA-256 recorded in this plan | in progress: LVC-06 is delivered and REL-01 is the next card |
+| DEP-10 | LVC-06 | LVC-03, LVC-04, LVC-05, LVC-07 | G-07 serial edge after the shared schema/protocol files are frozen, plus the REL-01 binary SHA-256 recorded in this plan | complete: LVC-06 delivered as `17b6745` and REL-01 recorded above |
 
 ## 任务卡
 
@@ -993,6 +1004,7 @@ Codex 对 Libra `771e994..6651ccf` 只读审查结论 **VERDICT: FAIL**，0 项�
 | 2026-11-19 | LVC-02 | Libra `main` `3a22517` 增加 minor 1 的 `vcs.identity/status/diff/log/show`。此前修改旧 receipt 的 fixture 摘要，但未证明新增条目来自旧 authority revision；撤销 locally-accepted，待修正 provenance 并完成实现评审。全量 clippy 仍被未改动的 `codex_capture_local_test` 递归上限拦住。 | 不通过，待修复 |
 | 2026-11-19 | LVC-06 | Libra `main` `6651ccf` 增加 minor 2 的 `vcs.stage/unstage/commit`。当时声称过期 fence 在写入前拒绝，后续检查发现该结论不成立（只哈希第一页且检查与写入非原子）；撤销 locally-accepted。REL-01 未切，LVC-03 仍不得开工。 | 不通过，待修复 |
 | 2026-11-20 | LVC-02 实现复审 | 30 轮 Codex 只读复审（`codex exec --sandbox read-only --skip-git-repo-check`，模型 gpt-6.1-terra）。前 29 轮各暴露 1 个 P0/P1（终态识别、拒绝标记与原始 ID 混淆、条件写入拒绝未处理、恢复路径与写回结果之间的竞态、review 存活判定、提交恢复与记录之间的窗口等），每轮修复后补回归；第 30 轮 `VERDICT: PASS`，0×P0/0×P1。 | **PASS** |
+| 2026-11-22 | REL-01 发布 | 标签 `v0.30.251` 指向 `17b6745`（`0.30.251`，三个版本面一致）并已推送；`cargo build --release` 产物 `libra --version` 为 `libra 0.30.251`，SHA-256 `6fdb3ca37a8a17ccc4f81979b7f17969b8afc0ceab7864c12cfc73d452a338a5`。证据已写入「REL-01 发布证据」。 | 接受 |
 | 2026-11-21 | LVC-06 实现复审 | 72 轮 Codex 只读复审（`codex exec --sandbox read-only --skip-git-repo-check`，模型 gpt-6.1-terra）。每轮修复后补回归：fence 与状态观测绑定、失败捕获/元数据读取/消失路径/根不可固定/目录观测一律不可 fence、字节预算在 status 与 write 两侧同账（含符号链接重试与失败读取）、暂存源快照在发布点复核、最终拒绝成为持久终态并可重放、普通 status 不再二次哈希。第 72 轮 `VERDICT: PASS`，0×P0/0×P1。 | **PASS** |
 | 2026-11-21 | LVC-06 交付 | Libra `main` `17b6745`（原始提交经三次 upstream rebase；`0.30.251`，allowlist 25→28，`PROTOCOL_MINOR` 2）；plugin fixture/receipt/receiver contract 指向 `17b6745af530a9df01e37e31e6845a00064c2f75`。门禁：`agent_bridge_vcs_test` 127、`mutation` 8、`approval` 5、`protocol` 8、`read_methods` 10、`schema` 6 全通过；`test-bridge-hooks` 构建 174 通过；`fence_tests` 17 与 `capture_budget_test` 2 通过；`cargo +nightly fmt --all --check`、`cargo clippy --all-targets --all-features -- -D warnings` 通过；双环境全量 nextest（rebase 前同内容树）12041 例，12040 通过、1 例 `DEFER-LVC06-01`；plugin `vitest` 123 通过/5 跳过、`tsc -b` 与契约脚本通过。 | 接受（`DEFER-LVC06-01` 见 LVC-06 卡） |
 | 2026-11-20 | LVC-02 交付 | Libra `main` `ff89507`（启用五个 minor 1 typed read，allowlist 20→25，写方法仍未启用）与 `7577397`（CLI 命令文档方法清单）；plugin fixture/receipt/receiver contract 指向权威 revision `ff89507`（`libra 0.30.217`）。门禁：Libra `agent_bridge_vcs_test` 85、`read_methods` 10、`protocol` 8、`schema` 6、`mutation` 8、`approval` 5 全通过，故障注入构建 111 通过，`cargo +nightly fmt --all --check` 通过，`cargo clippy --all-targets --all-features -- -D warnings` 通过；plugin `vitest` 122 通过/5 跳过，`tsc -b` 与 bundle 构建通过，ESLint 对受版本控制的源文件无错误（`.release-artifacts/` 的 200 个错误来自本地暂存目录，非本卡改动）。 | 接受 |
