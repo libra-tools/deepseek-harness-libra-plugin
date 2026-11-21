@@ -45,6 +45,7 @@ globalThis.__ModuleLoader__.load({
       statusConflict: "Conflicts",
       statusFile: "File",
       statusSelectHint: "Select a file to see its diff.",
+      statusMore: "Load more changes",
       diffTitle: "Diff",
       diffSides: "Side",
       diffSidesWorktree: "Worktree vs index",
@@ -117,6 +118,7 @@ globalThis.__ModuleLoader__.load({
       statusConflict: "冲突",
       statusFile: "文件",
       statusSelectHint: "选择文件以查看 diff。",
+      statusMore: "加载更多变更",
       diffTitle: "Diff",
       diffSides: "比较侧",
       diffSidesWorktree: "工作树 vs 索引",
@@ -461,64 +463,101 @@ globalThis.__ModuleLoader__.load({
         body);
     }
 
+    const BINDING_FAILURES = new Set(["unbound", "not_repo", "moved", "unsupported", "disconnected"]);
+
     function LibraPanel(props) {
       const t = props.t;
       const libra = props.libra;
       const evidenceClient = props.evidence;
       const tab = props.useTabInfo();
-      const [state, setState] = React.useState({ phase: "loading" });
-      const [status, setStatus] = React.useState(null);
+      const [binding, setBinding] = React.useState(null);
+      const [status, setStatus] = React.useState({ entries: [], next: null });
+      const [statusLoading, setStatusLoading] = React.useState(false);
       const [history, setHistory] = React.useState({ commits: [], next: null, loading: false });
       const [selected, setSelected] = React.useState(null);
       const [diff, setDiff] = React.useState(null);
       const [detail, setDetail] = React.useState(null);
+      const [errors, setErrors] = React.useState({});
       const [diagnostics, setDiagnostics] = React.useState({ available: false });
       const [expanded, setExpanded] = React.useState(false);
-      const generation = React.useRef(0);
-      const inFlight = React.useRef(null);
+      const channels = React.useRef(new Map());
+      const sequence = React.useRef(0);
 
-      const cancelInFlight = () => {
-        if (inFlight.current !== null) inFlight.current.abort();
-        inFlight.current = null;
+      const abortChannel = (channel) => {
+        const controller = channels.current.get(channel);
+        if (controller !== undefined) controller.abort();
+        channels.current.delete(channel);
+      };
+      const abortAll = () => {
+        for (const controller of channels.current.values()) controller.abort();
+        channels.current.clear();
       };
 
-      const request = (call) => {
-        cancelInFlight();
-        generation.current += 1;
-        const sequence = generation.current;
+      // Each channel (status, history, diff, story) has its own single-flight
+      // request, so starting one read never cancels another channel's page.
+      const run = (channel, call) => {
+        abortChannel(channel);
         const controller = new globalThis.AbortController();
-        inFlight.current = controller;
+        channels.current.set(channel, controller);
+        sequence.current += 1;
+        const mine = sequence.current;
         const abortFromTab = () => controller.abort();
         if (tab.tab.signal.aborted) controller.abort();
         else tab.tab.signal.addEventListener("abort", abortFromTab, { once: true });
         return Promise.resolve()
-          .then(() => call(controller.signal, `panel-${sequence}`))
+          .then(() => call(controller.signal, `panel-${channel}-${mine}`))
           .then(
-            (result) => (sequence === generation.current ? result : { stale: true }),
-            (error) => {
-              if (sequence !== generation.current || controller.signal.aborted) return { cancelled: true };
-              return { ok: false, error: { kind: "internal", message: String(error) } };
-            },
+            (result) => (channels.current.get(channel) === controller ? result : { stale: true }),
+            (error) => (controller.signal.aborted
+              ? { cancelled: true }
+              : { ok: false, error: { kind: "internal", message: String(error) } }),
           );
       };
+      const fail = (view, channel) => {
+        if (BINDING_FAILURES.has(view.state)) {
+          setBinding(view);
+          setStatus({ entries: [], next: null });
+          setHistory({ commits: [], next: null, loading: false });
+          setSelected(null);
+          setDiff(null);
+          setDetail(null);
+          return true;
+        }
+        setErrors((current) => ({ ...current, [channel]: view.key ?? "panelError" }));
+        return false;
+      };
+      const succeed = (channel) => setErrors((current) => {
+        if (current[channel] === undefined) return current;
+        const next = { ...current };
+        delete next[channel];
+        return next;
+      });
 
-      const loadStatus = () => request((signal, requestId) => libra.call("status", {}, requestId, signal))
-        .then((result) => {
-          if (result.stale === true || result.cancelled === true) return;
-          const view = failureState(result);
-          setState(view);
-          if (view.state === "ok") setStatus(result.data);
-        });
+      const loadStatus = (cursor) => {
+        setStatusLoading(true);
+        return run("status", (signal, requestId) => libra.call("status", cursor === null ? {} : { cursor }, requestId, signal))
+          .then((result) => {
+            setStatusLoading(false);
+            if (result.stale === true || result.cancelled === true) return;
+            const view = failureState(result);
+            if (view.state !== "ok") { fail(view, "status"); return; }
+            succeed("status");
+            setStatus((current) => ({
+              entries: cursor === null ? result.data.entries : current.entries.concat(result.data.entries),
+              next: result.data.cursor.next,
+            }));
+          });
+      };
 
       const loadHistory = (cursor) => {
         setHistory((current) => ({ ...current, loading: true }));
-        return request((signal, requestId) => libra.call("log", cursor === null ? {} : { cursor }, requestId, signal))
+        return run("history", (signal, requestId) => libra.call("log", cursor === null ? {} : { cursor }, requestId, signal))
           .then((result) => {
             if (result.stale === true || result.cancelled === true) return;
             const view = failureState(result);
-            if (view.state !== "ok") { setState(view); return; }
+            if (view.state !== "ok") { fail(view, "history"); return; }
+            succeed("history");
             setHistory((current) => ({
-              ...(cursor === null ? { commits: [], next: null } : current),
               ...mergeHistory(cursor === null ? { commits: [], next: null } : current, result.data),
               loading: false,
             }));
@@ -531,10 +570,15 @@ globalThis.__ModuleLoader__.load({
         .catch(() => setDiagnostics({ available: false }));
 
       const refresh = () => {
-        setState({ phase: "loading" });
+        abortChannel("diff");
         setDiff(null);
         setDetail(null);
-        loadStatus();
+        setSelected(null);
+        setBinding(null);
+        setErrors({});
+        setStatus({ entries: [], next: null });
+        setHistory({ commits: [], next: null, loading: false });
+        loadStatus(null);
         loadHistory(null);
         loadDiagnostics();
       };
@@ -542,54 +586,65 @@ globalThis.__ModuleLoader__.load({
       React.useEffect(() => {
         refresh();
         const release = tab.tab.actions.bindCommands({ refresh });
-        return () => { release(); cancelInFlight(); };
+        const abort = () => { abortAll(); };
+        tab.tab.signal.addEventListener("abort", abort, { once: true });
+        return () => {
+          release();
+          tab.tab.signal.removeEventListener("abort", abort);
+          abortAll();
+        };
       }, []);
-
-      React.useEffect(() => {
-        if (!tab.tab.visible) cancelInFlight();
-      }, [tab.tab.visible]);
 
       const openDiff = (entry) => {
         const sides = sidesForState(entry.state);
         setSelected({ path: entry.path, state: entry.state, sides });
         setDiff(null);
-        request((signal, requestId) => libra.call("diff", { sides, paths: [entry.path], limit: 1 }, requestId, signal))
+        run("diff", (signal, requestId) => libra.call("diff", { sides, paths: [entry.path], limit: 1 }, requestId, signal))
           .then((result) => {
             if (result.stale === true || result.cancelled === true) return;
             const view = failureState(result);
-            if (view.state !== "ok") { setState(view); return; }
+            if (view.state !== "ok") { setDiff(null); fail(view, "diff"); return; }
+            succeed("diff");
             setDiff(result.data);
           });
       };
 
       const openCommit = (oid) => {
         setDetail(null);
-        request((signal, requestId) => libra.call("show", { oid, limit: 20 }, requestId, signal))
+        run("detail", (signal, requestId) => libra.call("show", { oid, limit: 20 }, requestId, signal))
           .then((result) => {
             if (result.stale === true || result.cancelled === true) return;
             const view = failureState(result);
-            if (view.state !== "ok") { setState(view); return; }
+            if (view.state !== "ok") { setDetail(null); fail(view, "detail"); return; }
+            succeed("detail");
             setDetail(result.data);
           });
       };
 
-      const banner = state.state !== "ok" && state.state !== "loading"
-        ? h("p", { role: "status", style: { margin: "8px 0" } }, t(state.key ?? "panelError"))
-        : state.state === "loading" ? h("p", { role: "status" }, t("panelLoading")) : null;
-      const groups = groupStatusEntries(status === null ? [] : status.entries);
+      const banner = binding === null ? null : h("p", { role: "status", style: { margin: "8px 0" } }, t(binding.key));
+      const groups = groupStatusEntries(status.entries);
+      const loading = binding === null && status.entries.length === 0 && history.commits.length === 0
+        && errors.status === undefined && errors.history === undefined;
 
       return h("section", { style: { display: "flex", flexDirection: "column", gap: 6, font: "inherit", color: "inherit" } },
         h("header", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
           h("strong", null, t("panelTitle")),
-          panelButton(t("panelRefresh"), refresh, state.state === "loading")),
+          panelButton(t("panelRefresh"), refresh, false)),
+        loading ? h("p", { role: "status" }, t("panelLoading")) : null,
         banner,
-        state.state === "ok" ? sectionHeading(t("statusTitle")) : null,
-        state.state === "ok" && groups.length === 0 ? h("p", null, t("panelEmpty")) : null,
-        state.state === "ok" ? h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
-          groups.map((group) => statusGroupRow(group, selected, openDiff, t)),
-          selected === null ? h("p", { style: { opacity: 0.8 } }, t("statusSelectHint")) : null) : null,
-        diffSection(diff, t),
-        state.state === "ok" ? historySection(history, detail, t, loadHistory, openCommit) : null,
+        binding !== null ? null : h("div", null,
+          sectionHeading(t("statusTitle")),
+          errors.status !== undefined ? h("p", { role: "status" }, t(errors.status)) : null,
+          groups.length === 0 && errors.status === undefined ? h("p", null, t("panelEmpty")) : null,
+          h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+            groups.map((group) => statusGroupRow(group, selected, openDiff, t))),
+          status.next === null ? null : panelButton(t("statusMore"), () => loadStatus(status.next), statusLoading)),
+        binding !== null ? null : diffSection(diff, t),
+        binding !== null ? null : h("div", null,
+          sectionHeading(t("historyTitle")),
+          errors.history !== undefined ? h("p", { role: "status" }, t(errors.history)) : null,
+          history.commits.length === 0 ? h("p", null, t("panelEmpty")) : historySection(history, detail, t, loadHistory, openCommit)),
+        errors.detail !== undefined ? h("p", { role: "status" }, t(errors.detail)) : null,
         diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }));
     }
 
@@ -647,14 +702,15 @@ globalThis.__ModuleLoader__.load({
             evidence: evidenceCaller(ctx.remote, sessionId),
           }),
         }, LibraPanel)), "libra-version-control: panel body");
-        ctx.effect(() => ctx.slots.register({
+        ctx.effect(() => ctx.slots.inject("sidebar.right.pane.tab.title", () => ctx.slots.register({
           name: "sidebar.right.pane.tab.title",
           key: TAB_ID,
           locale: NS,
-        }, LibraTitle), "libra-version-control: panel title");
+        }, LibraTitle)), "libra-version-control: panel title");
       },
       internal: {
         TAB_ID,
+        LibraPanel,
         TAB_KIND,
         groupStatusEntries,
         sidesForState,
