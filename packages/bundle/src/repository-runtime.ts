@@ -208,7 +208,12 @@ export async function applyPerSession(
 
   async function ensureRuntime(binding: RepositoryBinding): Promise<PerRepositoryRuntime> {
     const existing = runtimes.get(binding.key);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined && existing.binding.client === binding.client) return existing;
+    if (existing !== undefined) {
+      // The registry replaced a crashed bridge with a new client; the mounted
+      // layers still hold the dead one, so retire them before remounting.
+      await disposeRuntime(binding.key);
+    }
     const pending = starting.get(binding.key);
     if (pending !== undefined) return pending;
 

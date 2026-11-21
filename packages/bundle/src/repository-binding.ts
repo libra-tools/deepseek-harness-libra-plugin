@@ -237,11 +237,19 @@ export class RepositoryRegistry {
     if (existing !== undefined && existing.cwd === cwd) {
       const binding = this.bindings.get(existing.key);
       if (binding !== undefined) {
-        // A crashed child is not a usable binding; drop it and re-identify so
-        // the caller gets a live bridge and fresh evidence.
         if (binding.client.connected) return { ok: true, binding };
+        // A crashed child is not a usable binding. Detach every session that
+        // referenced it and let each one bind again against a fresh bridge, so
+        // no stale reference count can outlive the replacement.
         this.bindings.delete(binding.key);
-        await binding.client.close().catch(() => undefined);
+        for (const [attachedId, attached] of [...this.sessions]) {
+          if (attached.key !== binding.key) continue;
+          this.sessions.delete(attachedId);
+          this.advanceGeneration(attachedId);
+        }
+        await this.withLock(this.identityTails, binding.key, async () => {
+          await binding.client.close().catch(() => undefined);
+        });
       }
       this.sessions.delete(sessionId);
     }

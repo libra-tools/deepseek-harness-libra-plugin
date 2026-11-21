@@ -305,6 +305,31 @@ describe("repository binding", () => {
     expect(second.identity.worktreeId).toBe(first.identity.worktreeId);
   });
 
+  it("reconciles reference counts when a shared bridge crashes", async () => {
+    const root = await fixture("shared-crash");
+    const identities = new Map([[root, identity(root)]]);
+    const { registry: instance } = registry(identities);
+    const first = bindingOf(await instance.bind("s-1", root));
+    bindingOf(await instance.bind("s-2", root));
+    expect(first.refs).toBe(2);
+
+    (first.client as unknown as { connected: boolean }).connected = false;
+    const replacement = bindingOf(await instance.bind("s-1", root));
+    expect(replacement.client).not.toBe(first.client);
+    expect(replacement.refs).toBe(1);
+    expect(instance.sessionBinding("s-2")).toBeUndefined();
+
+    const reattached = bindingOf(await instance.bind("s-2", root));
+    expect(reattached.client).toBe(replacement.client);
+    expect(replacement.refs).toBe(2);
+
+    await instance.release("s-1");
+    expect(replacement.refs).toBe(1);
+    expect(instance.liveBindings()).toHaveLength(1);
+    await instance.release("s-2");
+    expect(instance.liveBindings()).toHaveLength(0);
+  });
+
   it("keeps reported evidence immutable", async () => {
     const root = await fixture("frozen-evidence");
     const identities = new Map([[root, identity(root)]]);
