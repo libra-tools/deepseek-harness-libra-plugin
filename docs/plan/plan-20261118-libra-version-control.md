@@ -516,7 +516,7 @@
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `pending` / ` `
+**Lifecycle / Acceptance:** `in-progress` / ` `
 
 **Description:** Add the Libra session tab showing repository identity, branch/HEAD, staged/unstaged/untracked/conflict sections, bounded file diff and commit history. Behavior axis: read-only Client experience.
 
@@ -549,6 +549,8 @@
 
 **Implementation write set:** `deepseek-harness-libra-plugin: packages/bundle/client.js (includes the en/zh panel dictionaries); packages/bundle/client/libra-tab.js (new; validate loader contract in LVC-01; no user-visible string literals); packages/bundle/package.json (only if module export/files list changes); tests/ui/libra-version-control-panel.test.ts (new); README.md; docs/ui.md; docs/compatibility.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (read-only panel section; source only, no deploy before REL-03)`. `packages/bundle/locale/en.json` and `packages/bundle/locale/zh.json` are not in this write set.
 
+**Implementation progress (2026-11-22, in progress):** the tab type, keyed body and title slots, en/zh panel dictionaries and the panel itself are implemented in `packages/bundle/client.js`; the Host `libraEvidence` Remote namespace provides the diagnostics record. The panel covers grouped status with cursor pagination, side-labelled bounded diffs with truncation metadata, paginated commit history and detail files, explicit loading/empty/unbound/not-a-repository/unsupported/disconnected/moved states, cancellation on refresh and unmount, and binding key/generation tracking. Specs: `tests/ui/libra-version-control-panel.test.ts` (25) and `tests/bundle/evidence-remote.test.ts` (4). Candidate acceptance: tarball `0.2.0` sha256 `c1022953d0249b0ffd935459829020eed872dc0903aa69348999d085e88eb914`, `dist/index.js` sha256 `c781b13ad12745a801b73793e156467e0f996551a32df34dca44651262fbb3a9`, installed into the isolated `lvc-vcs` profile with `dsh plugin --profile lvc-vcs add`; the composed profile lists the bundle row. Twelve read-only Codex review rounds have surfaced 24 P1s, all addressed except the latest two (mixed/late read identity and evidence generation), which remain open before the browser acceptance can be claimed. `DEFER-LVC05-01` (browser/visual acceptance) is pending: this headless session cannot drive the running Desktop UI, so the two-workspace interaction check must be completed manually on the installed candidate before `done`.
+
 **Release write set:** `Inherited from REL-02`。
 
 **Files likely touched:** Client bundle, UI renderer, locales, slots declaration and UI tests.
@@ -573,7 +575,7 @@
 
 **Split/dependency notes:** Depends on LVC-04 Host read API. If required tab API differs, update plan before implementation rather than monkey-patching DSH UI.
 
-**修订历史:** 初稿。
+**修订历史:** 2026-11-22 在 `main` 实现；12 轮只读复审进行中，最新两项 findings 待修复。
 
 ### Task LVC-06: Add safe Libra stage, unstage and commit protocol
 
@@ -1026,6 +1028,7 @@ Codex 对 Libra `771e994..6651ccf` 只读审查结论 **VERDICT: FAIL**，0 项�
 | 2026-11-22 | LVC-04 实现复审 | 4 轮 Codex 只读复审。P1：面板缺少 Client 可调用的 Typert Remote 命名空间、Agent 工具绕过 Host 服务直接打 bridge、按消息文本误分类 bridge 错误、模型输出截断不声明、in-flight 共享可跨越 rebind、diff 文件/聚合截断元数据自相矛盾、合法的 page-cap 结果被拒、取消的陈旧读占住 serialized bridge 队列。第 4 轮 `VERDICT: PASS`。 | **PASS** |
 | 2026-11-22 | LVC-03 交付 | plugin `main` 推送提交 `f348c22`/`95e9a06`/`7772955`/`5eb465d`/`04ccc3b`（含 15 个实现与修复提交）。门禁：`vitest run` 159 passed / 5 skipped（`repository-binding.test.ts` 18、`repository-pool.test.ts` 17）、`tsc -b`、`eslint`（既有 `.release-artifacts` 除外）、`build-bundle-dist`、`test-contract --protocol-version 1`（29 passed / 5 skipped）全通过。website guide `deepseek-harness.en.md` 在 `libra-backend` `cf` 本地提交 `751fcdd`，未 push、未部署（REL-03 发布）。`DEFER-LVC03-01` 记录该 checkout 的既有类型/构建问题。 | 接受（`DEFER-LVC03-01` 见 LVC-03 卡） |
 | 2026-11-22 | LVC-04 交付 | plugin `main` 提交 `4df50a3`/`fe2b2fa`/`7ddaaf8`。交付 `libraVcs` Remote 命名空间（TypertRemoteService + session resource + requestId/AbortSignal）、共享 `LibraVcsReadService`（Agent 工具同路径）、稳定码优先的错误分类、严格响应校验、模型输出字节界与真实截断元数据、取消传导到 bridge 队列。门禁：`vitest run` 196 passed / 5 skipped（`libra-vcs-read.test.ts` 23、`vcs-read-tools.test.ts` 12、`handshake.test.ts` 15）、`tsc -b`、`eslint`、bundle build、contract 29 passed / 5 skipped。website guide 在 `cf` 本地提交 `3134fe4`/`03f1cc0`，未 push、未部署；`DEFER-LVC04-01` 记录既有构建问题。 | 接受（`DEFER-LVC04-01` 见 LVC-04 卡） |
+| 2026-11-22 | LVC-05 进行中 | Client tab/body/title slots、en/zh 字典、`libraEvidence` 诊断命名空间与只读面板已实现并推送至 `f50bbfb`；候选包安装进隔离 `lvc-vcs` profile，组合配置可见 bundle 行。12 轮只读复审累计 24 条 P1，已修复 22 条；混合/迟到读身份与证据代际两项修复在测试中出现刷新循环，已回退到已推送的绿色树，留待下一轮以无刷新循环的方式重做。浏览器交互验收因无 GUI 控制能力暂记 `DEFER-LVC05-01`。 | 进行中 |
 | 2026-11-22 | REL-01 发布 | 标签 `v0.30.251` 指向 `17b6745`（`0.30.251`，三个版本面一致）并已推送；`cargo build --release` 产物 `libra --version` 为 `libra 0.30.251`，SHA-256 `6fdb3ca37a8a17ccc4f81979b7f17969b8afc0ceab7864c12cfc73d452a338a5`。证据已写入「REL-01 发布证据」。 | 接受 |
 | 2026-11-21 | LVC-06 实现复审 | 72 轮 Codex 只读复审（`codex exec --sandbox read-only --skip-git-repo-check`，模型 gpt-6.1-terra）。每轮修复后补回归：fence 与状态观测绑定、失败捕获/元数据读取/消失路径/根不可固定/目录观测一律不可 fence、字节预算在 status 与 write 两侧同账（含符号链接重试与失败读取）、暂存源快照在发布点复核、最终拒绝成为持久终态并可重放、普通 status 不再二次哈希。第 72 轮 `VERDICT: PASS`，0×P0/0×P1。 | **PASS** |
 | 2026-11-21 | LVC-06 交付 | Libra `main` `17b6745`（原始提交经三次 upstream rebase；`0.30.251`，allowlist 25→28，`PROTOCOL_MINOR` 2）；plugin fixture/receipt/receiver contract 指向 `17b6745af530a9df01e37e31e6845a00064c2f75`。门禁：`agent_bridge_vcs_test` 127、`mutation` 8、`approval` 5、`protocol` 8、`read_methods` 10、`schema` 6 全通过；`test-bridge-hooks` 构建 174 通过；`fence_tests` 17 与 `capture_budget_test` 2 通过；`cargo +nightly fmt --all --check`、`cargo clippy --all-targets --all-features -- -D warnings` 通过；双环境全量 nextest（rebase 前同内容树）12041 例，12040 通过、1 例 `DEFER-LVC06-01`；plugin `vitest` 123 通过/5 跳过、`tsc -b` 与契约脚本通过。 | 接受（`DEFER-LVC06-01` 见 LVC-06 卡） |
