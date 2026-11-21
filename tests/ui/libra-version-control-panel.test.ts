@@ -1319,6 +1319,43 @@ describe("Libra panel component flows", () => {
     }
   });
 
+  it("shows the empty state when the repository has no changes", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve(logPage("first"));
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("t:panelEmpty");
+    panel.unmount();
+  });
+
+  it("renders a bounded binary diff with its notice", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.take("status").resolve(statusPage([{ path: "image.bin", state: "staged" }]));
+    tracker.take("log").resolve(logPage("first"));
+    await panel.settle();
+
+    const file = button(panel.tree, "image.bin");
+    file!();
+    await tick();
+    tracker.take("diff").resolve({
+      ok: true,
+      data: {
+        sides: "index-vs-head",
+        byteCap: 131072,
+        truncated: true,
+        truncation: "binary",
+        files: [{ path: "image.bin", patch: null, truncated: true, truncation: "binary" }],
+      },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("t:diffBinary");
+    panel.unmount();
+  });
+
   it("keeps two mounted Sessions isolated", async () => {
     const first = remoteHarness();
     const second = remoteHarness();
