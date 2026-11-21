@@ -121,6 +121,7 @@ export async function applyPerSession(
     "pending-events",
   );
   const spoolWarned = new Set<string>();
+  const deliveryFenced = new Set<string>();
   const SPOOL_WARN_BYTES = 64 * 1024 * 1024;
   const spoolName = (sessionId: string, identityKey: string): string =>
     `${sessionId.replace(/[^A-Za-z0-9._:-]/g, "_")}.${identityKey.replace(/[^A-Za-z0-9._:-]/g, "_")}.jsonl`;
@@ -136,6 +137,14 @@ export async function applyPerSession(
     const path = spoolPath(sessionId, scope);
     // The durable spool follows the same fail-closed redaction as the outbox:
     // a payload that cannot be redacted is not written at all.
+    const origin = canonicalHostDirectory(session);
+    if (origin === undefined) {
+      if (!spoolWarned.has(sessionId)) {
+        spoolWarned.add(sessionId);
+        ctx.logger.warn(`libra: session ${sessionId} has no trusted directory; refusing to spool its events`);
+      }
+      return false;
+    }
     const redacted = redactPayload(JSON.stringify(event.data));
     if (!redacted.ok) {
       if (!spoolWarned.has(sessionId)) {
@@ -147,7 +156,7 @@ export async function applyPerSession(
     try {
       ensureSpoolRoot();
       if (existsSync(path)) chmodSync(path, 0o600);
-      const line = `${JSON.stringify({ seq: event.seq, type: event.type, payload: redacted.payload })}\n`;
+      const line = `${JSON.stringify({ seq: event.seq, type: event.type, payload: redacted.payload, origin })}\n`;
       appendFileSync(path, line, { encoding: "utf8", mode: 0o600 });
       const size = statSync(path).size;
       if (size > SPOOL_WARN_BYTES && !spoolWarned.has(sessionId)) {
@@ -165,13 +174,20 @@ export async function applyPerSession(
    * the association uncertain, so such events are quarantined instead of being
    * delivered to whichever repository binds next.
    */
+  const canonicalHostDirectory = (session: Session): string | undefined => {
+    const directory = hostDirectoryOf(session);
+    if (directory === undefined) return undefined;
+    try { return realpathSync(directory); } catch { return undefined; }
+  };
   const quarantineUnbound = (sessionId: string): void => {
     const path = spoolPath(sessionId, "unbound");
     if (!existsSync(path)) return;
     try {
       renameSync(path, spoolPath(sessionId, `quarantine-${Date.now()}`));
     } catch (error) {
-      ctx.logger.warn(`libra: could not quarantine pre-binding events for session ${sessionId}: ${String(error)}`);
+      // Without a durable rename fence, that tail must never be delivered.
+      deliveryFenced.add(sessionId);
+      ctx.logger.warn(`libra: could not quarantine pre-binding events for session ${sessionId}; delivery is fenced: ${String(error)}`);
     }
   };
   const spoolScopeFor = (session: Session): string => {
@@ -630,6 +646,7 @@ export async function applyPerSession(
   const flushSpooledEvents = (sessionId: string, session: Session, runtime: PerRepositoryRuntime): void => {
     // Deliver only events that verifiably belong here: the Host must still
     // resolve to the recorded directory of this repository.
+    if (deliveryFenced.has(sessionId)) return;
     const hostDirectory = hostDirectoryOf(session);
     const recordedDirectory = registry.sessionDirectory(sessionId);
     const record = registry.sessionBindingRecord(sessionId);
@@ -643,7 +660,19 @@ export async function applyPerSession(
         const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
         let accepted = 0;
         for (const line of lines) {
-          const parsed = JSON.parse(line) as { seq: number; type: string; payload: string };
+          const parsed = JSON.parse(line) as { seq: number; type: string; payload: string; origin?: string };
+          // Deliver only events whose recorded origin is this repository; a
+          // tail from elsewhere is quarantined instead of being delivered.
+          if (parsed.origin === undefined
+            || !(sameDirectory(parsed.origin, recordedDirectory)
+              || (hostDirectory !== undefined && sameDirectory(parsed.origin, hostDirectory)))) {
+            try {
+              renameSync(path, spoolPath(sessionId, `quarantine-${Date.now()}`));
+            } catch {
+              deliveryFenced.add(sessionId);
+            }
+            break;
+          }
           if (!runtime.outbox.capture(session, {
             seq: parsed.seq,
             type: parsed.type,

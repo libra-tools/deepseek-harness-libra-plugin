@@ -458,6 +458,28 @@ describe("Host session-to-repository pool", () => {
     expect(totalQueuedFiles()).toBe(0);
   }, 60_000);
 
+  it("quarantines an event whose origin is another repository", async () => {
+    const first = fixtureRoot("origin-a");
+    const second = fixtureRoot("origin-b");
+    roots = [first, second];
+    const directories = new Map([["s-1", first]]);
+    const harness = await start(directories);
+    const one = session("s-1");
+
+    // Committed while the Session was in repository A, before binding starts.
+    await harness.capture(one, 0);
+    expect(spoolLines("s-1")).toBe(1);
+
+    // The Host moves the Session to repository B, then it binds there.
+    directories.set("s-1", second);
+    await harness.emit("session/created", one);
+    expect(harness.evidence().bindings()).toHaveLength(1);
+
+    // The tail still belongs to A, so it is not delivered to B.
+    expect(totalQueuedFiles()).toBe(0);
+    expect(spoolLines("s-1")).toBe(1);
+  }, 60_000);
+
   it("does not spool an event the outbox would refuse to redact", async () => {
     const shared = fixtureRoot("secret-spool");
     roots = [shared];
