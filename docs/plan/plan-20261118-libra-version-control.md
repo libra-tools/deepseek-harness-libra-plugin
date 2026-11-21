@@ -658,7 +658,7 @@ Sixteen read-only Codex review rounds closed 30 P1 findings; round 16 returned `
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `pending` / ` `
+**Lifecycle / Acceptance:** `in-progress` / ` `
 
 **Description:** Add a Host operation service for stage/unstage/commit and expose it to UI and Agent tools with matching params/results; Agent write calls require DSH approval, UI remains explicit user-driven. Behavior axis: one shared mutation path.
 
@@ -714,7 +714,7 @@ Sixteen read-only Codex review rounds closed 30 P1 findings; round 16 returned `
 
 **Split/dependency notes:** UI button operation is user-intent, not authority delegation; only Agent writes pass through approval.
 
-**修订历史:** 初稿。
+**修订历史:** 2026-11-22 开工；依赖 DEP-03/05/06/10 均已交付，开始实现共享 Host 变更服务、UI action 与 Agent 工具。
 
 ### Task LVC-08: Show truthful Agent capture, checkpoint and commit linkage
 
