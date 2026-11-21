@@ -553,6 +553,7 @@ globalThis.__ModuleLoader__.load({
             const view = failureState(result);
             if (view.state !== "ok") { fail(view, "status"); return; }
             succeed("status");
+            noteReadBinding(result.data);
             setStatus((current) => ({
               entries: cursor === null ? result.data.entries : current.entries.concat(result.data.entries),
               next: result.data.cursor.next,
@@ -568,6 +569,7 @@ globalThis.__ModuleLoader__.load({
             const view = failureState(result);
             if (view.state !== "ok") { fail(view, "history"); return; }
             succeed("history");
+            noteReadBinding(result.data);
             setHistory((current) => ({
               ...mergeHistory(cursor === null ? { commits: [], next: null } : current, result.data),
               loading: false,
@@ -577,6 +579,12 @@ globalThis.__ModuleLoader__.load({
 
       const diagnosticsGeneration = React.useRef(0);
       const bindingState = React.useRef({ key: null, generation: null, ok: false, initialized: false });
+      const lastReadBinding = React.useRef(null);
+      const lastEvidenceBinding = React.useRef(null);
+      const noteReadBinding = (data) => {
+        if (data === null || data === undefined || data.bindingKey === undefined) return;
+        lastReadBinding.current = { key: data.bindingKey, generation: data.bindingGeneration };
+      };
       const checkSequence = React.useRef(0);
       const checkBinding = () => {
         checkSequence.current += 1;
@@ -603,10 +611,18 @@ globalThis.__ModuleLoader__.load({
             ok: true,
             initialized: true,
           };
-          // First successful poll after mount needs no reload: the mount's own
-          // reads are already loading this exact binding. Later identity or
-          // generation changes (rebind, replacement bridge) require one.
-          if (previous.initialized && changed) refresh();
+          // The mount's own reads may already belong to a binding the Session
+          // left before this first check completed; only reuse them when they
+          // prove the same identity. Later changes always reload.
+          if (previous.initialized && changed) {
+            refresh();
+          } else if (!previous.initialized) {
+            const read = lastReadBinding.current;
+            const evidenceRead = lastEvidenceBinding.current;
+            const staleRead = read !== null && (read.key !== result.bindingKey || read.generation !== result.generation);
+            const staleEvidence = evidenceRead !== null && evidenceRead !== result.bindingKey;
+            if (staleRead || staleEvidence) refresh();
+          }
         })
         .catch(() => {
           if (checkSequence.current !== mine) return;
@@ -625,6 +641,9 @@ globalThis.__ModuleLoader__.load({
           .then(() => evidenceClient.session())
           .then((result) => {
             if (diagnosticsGeneration.current !== mine) return;
+            if (result !== null && result !== undefined && result.ok === true) {
+              lastEvidenceBinding.current = result.data.bindingKey ?? null;
+            }
             setDiagnostics(describeEvidence(result));
           })
           .catch(() => {
@@ -688,6 +707,7 @@ globalThis.__ModuleLoader__.load({
             const view = failureState(result);
             if (view.state !== "ok") { setDiff(null); fail(view, "diff"); return; }
             succeed("diff");
+            noteReadBinding(result.data);
             setDiff(result.data);
           });
       };
@@ -703,6 +723,7 @@ globalThis.__ModuleLoader__.load({
             const view = failureState(result);
             if (view.state !== "ok") { setDetail(null); fail(view, "detail"); return; }
             succeed("detail");
+            noteReadBinding(result.data);
             setDetail({
               oid: result.data.oid,
               summary: result.data.summary,

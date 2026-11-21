@@ -1013,6 +1013,57 @@ describe("Libra panel component flows", () => {
     panel.unmount();
   });
 
+  it("discards initial reads that belong to a binding the first check left", async () => {
+    const tracker = remoteHarness();
+    tracker.manualBinding();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+
+    // The mount's reads finish under binding A before the first check.
+    tracker.take("status").resolve({
+      ok: true,
+      data: {
+        entries: [{ path: "binding-a.ts", state: "staged", oldPath: null }],
+        cursor: { next: null },
+        bindingKey: "key-a",
+        bindingGeneration: 1,
+      },
+    });
+    tracker.take("log").resolve({
+      ok: true,
+      data: { commits: [{ oid: "a".repeat(40), summary: "binding-a", authorTime: 1 }], cursor: { next: null }, bindingKey: "key-a", bindingGeneration: 1 },
+    });
+    await panel.settle();
+    // Until the first check proves the binding, cached reads stay suppressed.
+    expect(textOf(panel.tree)).not.toContain("binding-a.ts");
+
+    // The first check reports that the Session is already on binding B.
+    tracker.resolveBinding({ ok: true, bindingKey: "key-b", generation: 2 });
+    tracker.resolveBinding({ ok: true, bindingKey: "key-b", generation: 2 });
+    await panel.settle();
+    await tick();
+    expect(textOf(panel.tree)).not.toContain("binding-a.ts");
+    expect(tracker.pendingCount("status")).toBe(1);
+
+    tracker.take("status").resolve({
+      ok: true,
+      data: {
+        entries: [{ path: "binding-b.ts", state: "staged", oldPath: null }],
+        cursor: { next: null },
+        bindingKey: "key-b",
+        bindingGeneration: 2,
+      },
+    });
+    tracker.take("log").resolve({
+      ok: true,
+      data: { commits: [{ oid: "b".repeat(40), summary: "binding-b", authorTime: 1 }], cursor: { next: null }, bindingKey: "key-b", bindingGeneration: 2 },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("binding-b.ts");
+    expect(textOf(panel.tree)).not.toContain("binding-a.ts");
+    panel.unmount();
+  });
+
   it("keeps two mounted Sessions isolated", async () => {
     const first = remoteHarness();
     const second = remoteHarness();

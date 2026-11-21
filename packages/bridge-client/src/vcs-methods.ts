@@ -68,6 +68,9 @@ export interface VcsStatusEntry {
 export interface VcsStatusResult {
   entries: VcsStatusEntry[];
   cursor: VcsCursor;
+  /** Binding identity the Host read this page under, when attached by the Host. */
+  bindingKey?: string;
+  bindingGeneration?: number;
 }
 
 export type VcsDiffSides = "worktree-vs-index" | "index-vs-head" | "worktree-vs-oid";
@@ -96,6 +99,8 @@ export interface VcsDiffResult {
   truncated: boolean;
   truncation: VcsDiffTruncation;
   files: VcsDiffFile[];
+  bindingKey?: string;
+  bindingGeneration?: number;
 }
 
 export interface VcsLogParams {
@@ -112,6 +117,8 @@ export interface VcsCommitSummary {
 export interface VcsLogResult {
   commits: VcsCommitSummary[];
   cursor: VcsCursor;
+  bindingKey?: string;
+  bindingGeneration?: number;
 }
 
 export interface VcsShowParams {
@@ -132,6 +139,8 @@ export interface VcsShowResult {
   parents: string[];
   files: VcsShowFile[];
   cursor: VcsCursor;
+  bindingKey?: string;
+  bindingGeneration?: number;
 }
 
 const DIFF_SIDES: readonly VcsDiffSides[] = ["worktree-vs-index", "index-vs-head", "worktree-vs-oid"];

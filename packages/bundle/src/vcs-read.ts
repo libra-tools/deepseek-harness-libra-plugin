@@ -207,7 +207,13 @@ export class LibraVcsReadService {
     const entry = shared;
     entry.waiters += 1;
     try {
-      return await this.await(entry.work, options.signal, resolution.scope.validate);
+      const result = await this.await(entry.work, options.signal, resolution.scope.validate);
+      // Attach the binding this result was read under, so the Client can tell
+      // data from a previous binding apart from the one it checks next.
+      return Object.assign({}, result as object, {
+        bindingKey: resolution.scope.bindingKey,
+        bindingGeneration: resolution.scope.generation,
+      }) as T;
     } finally {
       entry.waiters -= 1;
       // When the last waiter cancelled, cancel the underlying bridge request
