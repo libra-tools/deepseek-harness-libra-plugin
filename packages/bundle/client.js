@@ -485,6 +485,7 @@ globalThis.__ModuleLoader__.load({
       const [errors, setErrors] = React.useState({});
       const [verifying, setVerifying] = React.useState(false);
       const [validationFailed, setValidationFailed] = React.useState(false);
+      const bindingFailureSource = React.useRef(null);
       const visibleBefore = React.useRef(tab.tab.visible);
       const [diagnostics, setDiagnostics] = React.useState({ available: false });
       const [expanded, setExpanded] = React.useState(false);
@@ -523,6 +524,7 @@ globalThis.__ModuleLoader__.load({
       };
       const fail = (view, channel) => {
         if (BINDING_FAILURES.has(view.state)) {
+          bindingFailureSource.current = "read";
           abortAll();
           diagnosticsGeneration.current += 1;
           setBinding(view);
@@ -642,6 +644,7 @@ globalThis.__ModuleLoader__.load({
           setVerifying(false);
           const previous = bindingState.current;
           if (result === undefined || result.ok !== true) {
+            bindingFailureSource.current = "check";
             bindingState.current = { key: null, generation: null, ok: false, initialized: true };
             clearAllViews();
             setValidationFailed(false);
@@ -660,7 +663,10 @@ globalThis.__ModuleLoader__.load({
             ok: true,
             initialized: true,
           };
-          setBinding(null);
+          if (bindingFailureSource.current !== "read") {
+            bindingFailureSource.current = null;
+            setBinding(null);
+          }
           // The mount's own reads may already belong to a binding the Session
           // left before this first check completed. Later changes reload; the
           // first check drops only the channels whose reads prove another
@@ -690,6 +696,7 @@ globalThis.__ModuleLoader__.load({
           // the current binding; clear them and fail closed until a later
           // check succeeds.
           clearAllViews();
+          bindingFailureSource.current = "validation";
           bindingState.current = { key: null, generation: null, ok: false, initialized: true };
           setBinding(null);
           setValidationFailed(true);
@@ -736,6 +743,7 @@ globalThis.__ModuleLoader__.load({
       };
 
       const refresh = () => {
+        bindingFailureSource.current = null;
         // A refresh is a new generation for every channel: late results from the
         // previous generation (including a pending commit detail) must not land.
         abortAll();

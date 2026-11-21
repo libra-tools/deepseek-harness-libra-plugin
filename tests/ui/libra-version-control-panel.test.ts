@@ -1292,6 +1292,33 @@ describe("Libra panel component flows", () => {
     panel.unmount();
   });
 
+  it("keeps a read-side unsupported state when the binding identity still matches", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const intervals: Array<() => void> = [];
+    const originalInterval = globalThis.setInterval;
+    const originalClear = globalThis.clearInterval;
+    globalThis.setInterval = ((callback: () => void) => { intervals.push(callback); return 1; }) as typeof setInterval;
+    globalThis.clearInterval = (() => undefined) as typeof clearInterval;
+    try {
+      const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+      tracker.take("status").resolve({ ok: false, error: { kind: "unsupported_capability", message: "vcs.status not supported" } });
+      tracker.take("log").resolve(logPage("old bridge"));
+      await panel.settle();
+      expect(textOf(panel.tree)).toContain("t:panelUnsupported");
+
+      // A healthy identity response does not prove that this bridge supports
+      // the failed read capability, so it must not erase the read failure.
+      intervals[0]!();
+      await panel.settle();
+      expect(textOf(panel.tree)).toContain("t:panelUnsupported");
+      panel.unmount();
+    } finally {
+      globalThis.setInterval = originalInterval;
+      globalThis.clearInterval = originalClear;
+    }
+  });
+
   it("keeps two mounted Sessions isolated", async () => {
     const first = remoteHarness();
     const second = remoteHarness();
