@@ -187,7 +187,8 @@ function remoteHarness(options: { cooperativeAborts?: boolean } = {}) {
     if (cooperative) signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
   });
   let bindingResult: { ok: true; bindingKey: string; generation: number } | { ok: false; error: { kind: string; message: string } } = { ok: true, bindingKey: "key-1", generation: 1 };
-  const libra = { binding: () => Promise.resolve(bindingResult), call: (method: DeferredCall["method"], params: Record<string, unknown>, requestId: string, signal: AbortSignal) => {
+  let bindingRejects = false;
+  const libra = { binding: () => (bindingRejects ? Promise.reject(new Error("transport down")) : Promise.resolve(bindingResult)), call: (method: DeferredCall["method"], params: Record<string, unknown>, requestId: string, signal: AbortSignal) => {
     switch (method) {
       case "status": return deferred("status")("s-1", params, requestId, signal);
       case "log": return deferred("log")("s-1", params, requestId, signal);
@@ -198,7 +199,8 @@ function remoteHarness(options: { cooperativeAborts?: boolean } = {}) {
   return {
     calls,
     libra,
-    setBinding(result: typeof bindingResult) { bindingResult = result; },
+    setBinding(result: typeof bindingResult) { bindingResult = result; bindingRejects = false; },
+    rejectBinding() { bindingRejects = true; },
     take(method: DeferredCall["method"]): DeferredCall {
       const queue = pending.get(method);
       if (queue === undefined || queue.length === 0) throw new Error(`no pending ${method}`);
@@ -855,7 +857,9 @@ describe("Libra panel component flows", () => {
     tracker.setBinding({ ok: true, bindingKey: "key-2", generation: 2 });
     (tabState.tab.tab as { visible: boolean }).visible = true;
     panel.render();
-    // Cached rows are suppressed until the binding is revalidated.
+    // The very first render after becoming visible already suppresses cached rows.
+    expect(textOf(panel.tree)).not.toContain("hidden-old.ts");
+    expect(textOf(panel.tree)).toContain("t:panelLoading");
     await panel.settle();
     expect(textOf(panel.tree)).not.toContain("hidden-old.ts");
     expect(textOf(panel.tree)).toContain("t:panelLoading");
@@ -866,6 +870,53 @@ describe("Libra panel component flows", () => {
     expect(textOf(panel.tree)).toContain("visible-new.ts");
     expect(textOf(panel.tree)).not.toContain("hidden-old.ts");
     panel.unmount();
+  });
+
+  it("fails closed when the binding check itself is rejected", async () => {
+    const tracker = remoteHarness();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.take("status").resolve(statusPage([{ path: "before-down.ts", state: "staged" }]));
+    tracker.take("log").resolve(logPage("before-down"));
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("before-down.ts");
+
+    (tabState.tab.tab as { visible: boolean }).visible = false;
+    panel.render();
+    tracker.rejectBinding();
+    (tabState.tab.tab as { visible: boolean }).visible = true;
+    panel.render();
+    await panel.settle();
+
+    // A rejected identity check shows an explicit error and keeps cached rows hidden.
+    expect(textOf(panel.tree)).not.toContain("before-down.ts");
+    expect(textOf(panel.tree)).toContain("t:panelError");
+
+    // A later successful check (new binding) recovers with fresh rows.
+    tracker.setBinding({ ok: true, bindingKey: "key-2", generation: 2 });
+    const intervals: Array<() => void> = [];
+    const originalInterval = globalThis.setInterval;
+    const originalClear = globalThis.clearInterval;
+    globalThis.setInterval = ((callback: () => void) => { intervals.push(callback); return 1; }) as typeof setInterval;
+    globalThis.clearInterval = (() => undefined) as typeof clearInterval;
+    try {
+      // Re-render with a successful identity read, as the visible poll does.
+      (tabState.tab.tab as { visible: boolean }).visible = false;
+      panel.render();
+      (tabState.tab.tab as { visible: boolean }).visible = true;
+      panel.render();
+      await panel.settle();
+      expect(textOf(panel.tree)).not.toContain("t:panelError");
+      tracker.take("status").resolve(statusPage([{ path: "after-down.ts", state: "staged" }]));
+      tracker.take("log").resolve(logPage("after-down"));
+      await panel.settle();
+      expect(textOf(panel.tree)).toContain("after-down.ts");
+      expect(textOf(panel.tree)).not.toContain("before-down.ts");
+      panel.unmount();
+    } finally {
+      globalThis.setInterval = originalInterval;
+      globalThis.clearInterval = originalClear;
+    }
   });
 
   it("keeps two mounted Sessions isolated", async () => {

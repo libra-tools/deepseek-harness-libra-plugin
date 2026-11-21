@@ -484,6 +484,8 @@ globalThis.__ModuleLoader__.load({
       const [detail, setDetail] = React.useState(null);
       const [errors, setErrors] = React.useState({});
       const [verifying, setVerifying] = React.useState(false);
+      const [validationFailed, setValidationFailed] = React.useState(false);
+      const visibleBefore = React.useRef(tab.tab.visible);
       const [diagnostics, setDiagnostics] = React.useState({ available: false });
       const [expanded, setExpanded] = React.useState(false);
       const channels = React.useRef(new Map());
@@ -578,6 +580,7 @@ globalThis.__ModuleLoader__.load({
       const checkBinding = () => Promise.resolve()
         .then(() => libra.binding())
         .then((result) => {
+          setValidationFailed(false);
           const previous = bindingState.current;
           if (result === undefined || result.ok !== true) {
             bindingState.current = { key: null, generation: null, ok: false, initialized: true };
@@ -599,7 +602,11 @@ globalThis.__ModuleLoader__.load({
           // generation changes (rebind, replacement bridge) require one.
           if (previous.initialized && changed) refresh();
         })
-        .catch(() => undefined);
+        .catch(() => {
+          // A rejected identity check cannot prove the cached rows belong to
+          // the current binding; fail closed until a later check succeeds.
+          setValidationFailed(true);
+        });
 
       const loadDiagnostics = () => {
         diagnosticsGeneration.current += 1;
@@ -713,6 +720,10 @@ globalThis.__ModuleLoader__.load({
           });
       };
 
+      const becameVisible = visibleBefore.current !== tab.tab.visible;
+      visibleBefore.current = tab.tab.visible;
+      const visibleTransition = tab.tab.visible && becameVisible;
+      const suppressCached = verifying || validationFailed || visibleTransition;
       const banner = binding === null ? null : h("p", { role: "status", style: { margin: "8px 0" } }, t(binding.key));
       const groups = groupStatusEntries(status.entries);
       const loading = binding === null && status.entries.length === 0 && history.commits.length === 0
@@ -722,22 +733,24 @@ globalThis.__ModuleLoader__.load({
         h("header", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
           h("strong", null, t("panelTitle")),
           panelButton(t("panelRefresh"), refresh, false)),
-        loading || verifying ? h("p", { role: "status" }, t("panelLoading")) : null,
-        verifying ? null : banner,
-        verifying || binding !== null ? null : h("div", null,
+        loading || verifying || visibleTransition ? h("p", { role: "status" }, t("panelLoading")) : null,
+        validationFailed
+          ? h("p", { role: "status", style: { margin: "8px 0" } }, t("panelError"))
+          : suppressCached ? null : banner,
+        suppressCached || binding !== null ? null : h("div", null,
           sectionHeading(t("statusTitle")),
           errors.status !== undefined ? h("p", { role: "status" }, t(errors.status)) : null,
           groups.length === 0 && errors.status === undefined ? h("p", null, t("panelEmpty")) : null,
           h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
             groups.map((group) => statusGroupRow(group, selected, openDiff, t))),
           status.next === null ? null : panelButton(t("statusMore"), () => loadStatus(status.next), statusLoading)),
-        verifying || binding !== null ? null : diffSection(diff, t),
-        verifying || binding !== null ? null : h("div", null,
+        suppressCached || binding !== null ? null : diffSection(diff, t),
+        suppressCached || binding !== null ? null : h("div", null,
           sectionHeading(t("historyTitle")),
           errors.history !== undefined ? h("p", { role: "status" }, t(errors.history)) : null,
           history.commits.length === 0 ? h("p", null, t("panelEmpty")) : historySection(history, detail, t, loadHistory, openCommit, loadDetailMore)),
-        verifying ? null : errors.detail !== undefined ? h("p", { role: "status" }, t(errors.detail)) : null,
-        verifying ? null : diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }));
+        suppressCached ? null : errors.detail !== undefined ? h("p", { role: "status" }, t(errors.detail)) : null,
+        suppressCached ? null : diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }));
     }
 
     function LibraTitle(props) {
