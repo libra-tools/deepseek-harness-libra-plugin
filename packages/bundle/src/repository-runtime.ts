@@ -1,5 +1,5 @@
 /** Host-owned per-Session Libra bridge lifecycle (plan-20261118 LVC-03). */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -544,7 +544,7 @@ export async function applyPerSession(
     const sessionId = String(session.id);
     const bound = registry.sessionBinding(sessionId);
     const runtime = bound === undefined ? undefined : runtimes.get(bound.key);
-    if (runtime !== undefined && runtime.sessions.has(sessionId)) return;
+    if (runtime !== undefined && runtime.sessions.has(sessionId) && sessionServedBy(bound!.key)(session)) return;
     const path = spoolPath(sessionId);
     const size = spoolBytes.get(sessionId) ?? (existsSync(path) ? statSync(path).size : 0);
     if (size > MAX_SPOOL_BYTES) {
@@ -569,13 +569,22 @@ export async function applyPerSession(
     if (!existsSync(path)) return;
     try {
       const lines = readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
+      let accepted = 0;
       for (const line of lines) {
         const parsed = JSON.parse(line) as BufferedSessionEvent;
-        runtime.outbox.capture(session, parsed);
+        // Keep the durable copy unless the outbox confirms the capture.
+        if (!runtime.outbox.capture(session, parsed)) break;
+        accepted += 1;
       }
-      unlinkSync(path);
-      spoolBytes.delete(sessionId);
-      spoolWarned.delete(sessionId);
+      if (accepted === lines.length) {
+        unlinkSync(path);
+        spoolBytes.delete(sessionId);
+        spoolWarned.delete(sessionId);
+      } else if (accepted > 0) {
+        const remaining = `${lines.slice(accepted).join("\n")}\n`;
+        writeFileSync(path, remaining, "utf8");
+        spoolBytes.set(sessionId, Buffer.byteLength(remaining, "utf8"));
+      }
     } catch (error) {
       ctx.logger.warn(`libra: could not drain spooled events for session ${sessionId}: ${String(error)}`);
     }
@@ -611,12 +620,15 @@ export async function applyPerSession(
     disposeCreated();
     disposePreStep();
     disposeLifecycle();
-    disposeEventBuffer();
     disposeTools();
+    // Keep spooling events until in-flight binds settle: a handshake that is
+    // still running has no outbox mounted, so those committed events must
+    // remain durable rather than disappear during unload.
     await Promise.allSettled([...pendingBinds, ...pendingOperations, ...runtimeTails.values()]);
     await Promise.allSettled([...runtimes.values()].map((runtime) => runtime.dispose()));
     runtimes.clear();
     facades.clear();
+    disposeEventBuffer();
     await registry.dispose();
     for (const dispose of hostDisposers.reverse()) {
       try { await dispose(); } catch { /* best-effort service/projection cleanup */ }

@@ -48,7 +48,7 @@ export interface OutboxMountOptions {
  */
 export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: OutboxMountOptions): {
   retire: (session: Session) => Promise<void>;
-  capture: (session: Session, event: { seq: number; type: string; data: unknown }) => void;
+  capture: (session: Session, event: { seq: number; type: string; data: unknown }) => boolean;
   open: (session: Session) => Promise<void>;
   wait: (session: Session) => Promise<void>;
   setMemory: (memory: { wait: (session: Session) => Promise<void>; retire: (session: Session) => Promise<void> }) => void;
@@ -193,7 +193,7 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
   // next event advances the prior generation. Never replay a queue merely
   // because an abandoned directory exists at plugin startup.
 
-  const capture = (session: Session, event: { seq: number; type: string; data: unknown }): void => {
+  const capture = (session: Session, event: { seq: number; type: string; data: unknown }): boolean => {
     try {
       const header = session.header;
       ensureProjection(session).projection.capture({
@@ -205,8 +205,10 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
         event_type: event.type,
         payload: JSON.stringify(event.data),
       });
+      return true;
     } catch (error) {
       ctx.logger.warn(`libra-outbox: event capture failed: ${String(error)}`);
+      return false;
     }
   };
   disposers.push(ctx.on("session/event", (session, event) => {

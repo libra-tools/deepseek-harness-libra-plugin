@@ -6,7 +6,7 @@
  * one child serves each worktree, a cwd change fails closed, the explicit
  * Host rebind moves a session, and unload closes every child.
  */
-import { chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -154,6 +154,12 @@ describe("Host session-to-repository pool", () => {
     return readdirSync(outboxRoot!).filter((name) => namespacePattern.test(name));
   }
 
+  function spoolLines(sessionId: string): number {
+    const path = join(outboxRoot!, "pending-events", `${sessionId}.jsonl`);
+    if (!existsSync(path)) return 0;
+    return readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0).length;
+  }
+
   function totalQueuedFiles(): number {
     return namespaces().reduce((count, namespace) => count + queuedFiles(namespace).length, 0);
   }
@@ -246,6 +252,8 @@ describe("Host session-to-repository pool", () => {
 
     await harness.capture(one, 1);
     expect(totalQueuedFiles()).toBe(queuedBefore);
+    // Events committed after the move stay durable until the Host rebinds.
+    expect(spoolLines("s-1")).toBe(1);
 
     const result = await harness.binding().rebind(one);
     expect(result.ok).toBe(true);
@@ -253,6 +261,9 @@ describe("Host session-to-repository pool", () => {
     expect(harness.evidence().failure("s-1")).toBeUndefined();
     expect(result.binding.identity.worktreeId).not.toBe(before[0]!.identity.worktreeId);
     expect(harness.evidence().bindings()).toHaveLength(1);
+    // The spooled event is drained into the rebound repository.
+    expect(spoolLines("s-1")).toBe(0);
+    expect(totalQueuedFiles()).toBe(queuedBefore + 1);
   }, 60_000);
 
   it("releases the last session's runtime and unload closes every child", async () => {
