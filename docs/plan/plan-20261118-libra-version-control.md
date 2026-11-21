@@ -376,7 +376,7 @@
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `pending` / ` `
+**Lifecycle / Acceptance:** `in-progress` / ` `
 
 **Description:** 将插件从单一固定 repositoryRoot bridge 改为基于可信 Session effective cwd 的 repository binding，并按 canonical `.libra` repo 隔离 bridge 生命周期和相关 state。行为轴：Session-to-repository binding。
 
@@ -584,12 +584,13 @@
 - [x] From Libra repo root, add `(new)` test functions to the existing targets and run: `cargo test --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test`. Delivered result: `agent_bridge_vcs_test` 127, `agent_bridge_mutation_test` 8, `agent_bridge_approval_test` 5, `agent_bridge_protocol_test` 8, plus `agent_bridge_read_methods_test` 10 and `agent_bridge_schema_test` 6. The `test-bridge-hooks` build of `agent_bridge_vcs_test` runs 174, and the new unit modules add 18 (`fence_tests` 17, `capture_budget_test` 2, of which the seam-gated ones run in the hook build).
 - [x] `cargo +nightly fmt --all --check` passes.
 - [x] From Libra repo root: `cargo clippy --all-features --lib --test agent_bridge_vcs_test --test agent_bridge_mutation_test --test agent_bridge_approval_test --test agent_bridge_protocol_test -- -D warnings`. The stronger `cargo clippy --all-targets --all-features -- -D warnings` also passes on the delivered tree.
-- [x] Dual-environment closeout ran on the pre-rebase tree: `source .env.test && source .env.live-test && cargo nextest run --all --no-fail-fast --retries 2` executed 12,041 tests with 12,040 passed and 1 failed. The single failure is filed as `DEFER-LVC06-01` below; the same run's earlier revision also failed `cli::tests::pointer_layout_allowlist_matches_commands`, which the upstream fixed before the rebase.
+- [x] Dual-environment closeout on the pushed tree: `source .env.test && source .env.live-test && cargo nextest run --all --no-fail-fast --retries 2` in `/Volumes/Data/gitmono/libra-lvc02-main` at `17b6745` executed 12,063 tests with 12,061 passed, 53 skipped and 2 failed. Both failures are outside this card's write set and are filed as `DEFER-LVC06-01` and `DEFER-LVC06-02` below. An earlier closeout run at `0.30.237` also failed `cli::tests::pointer_layout_allowlist_matches_commands`, which the upstream fixed before this rebase.
 
 **Full-suite trigger:** `T-1` and `T-5`: new public write protocol and explicit approval/fence contract.
 
 **Closeout findings:**
 
+- `DEFER-LVC06-02` — `command::agent_push_test::agent_push_after_prune_requires_force_rewrite_and_lease_protects` fails at `tests/command/agent_push_test.rs:549`: after another writer moves the remote ref behind our back, `libra agent push --force-rewrite` still fails closed, but its stderr no longer contains `non-fast-forward`. The test file and the agent-push lease code are outside this card's write set, and the closeout run on the same tree without the three latest upstream commits passed this test, so the change came from upstream `6d4b1aa` (`feat(push): treat an empty lease expectation as must-not-exist (#1036)`). Disposition: deferred to the plan that owns the push lease contract.
 - `DEFER-LVC06-01` — `command::init_separate_libra_dir_test::legacy_separate_layout_repo_is_no_longer_detected` fails on the delivered tree: `libra status` in a directory whose `.libra` is a legacy `gitdir:` pointer file exits 0, so the test's `assert_ne!(status, 0)` fails at `tests/command/init_separate_libra_dir_test.rs:84`. The test and the repository-layout detection it exercises are outside this card's write set; `libra diff --stat origin/main HEAD` shows the LVC-06 commit touches only the bridge, `src/command/status.rs`, `src/command/maintenance.rs`, `src/internal/config_ownership.rs`, `src/utils/beneath.rs`, the four bridge test targets, `tests/INDEX.md`, `tests/SERIAL_REGISTRY.tsv`, `COMPATIBILITY.md` and the two developer docs, none of which decide legacy-layout detection. Reproduction on the pre-rebase tree (Libra `0.30.237`, which is `d242b90` plus the same single LVC-06 commit) fails identically with `TRY 3 FAIL`. Disposition: deferred to the plan that owns `libra init` layout detection; this card does not modify that surface.
 
 **Dependencies:** `DEP-01`, `DEP-02`。LVC-02 必须先于本卡，因为两卡共享 Libra protocol/method/VCS 文件和 plugin schema/receiver 文件。本卡结束后立刻切 REL-01，把 `libra --version` 的整行输出和该二进制 SHA-256 写入本计划；在此之前 LVC-03 及之后的卡不得开工，也不得与本卡并发。
@@ -622,7 +623,7 @@
 
 **Split/dependency notes:** Must be released before plugin exposes write actions.
 
-**修订历史:** 2026-11-19 在干净 `main` 实现并推送 `6651ccf`。2026-11-20/21 在隔离的 `main` 工作区完成 72 轮 Codex 只读实现复审并修复：fence 与状态观测同源、所有观测失败一律不可 fence、status/write 两侧字节预算同账、暂存源快照在发布点复核、最终拒绝成为持久终态、普通 status 不再二次哈希；第 72 轮 `VERDICT: PASS`。2026-11-21/22 交付 `17b6745`（三次 upstream rebase 后，`0.30.251`），plugin fixture/receipt/receiver contract 指向 `17b6745af530a9df01e37e31e6845a00064c2f75`；`DEFER-LVC06-01` 记录唯一一条非本卡面的全量失败。REL-01 仍是下一张卡，LVC-03 及之后不得开工。
+**修订历史:** 2026-11-19 在干净 `main` 实现并推送 `6651ccf`。2026-11-20/21 在隔离的 `main` 工作区完成 72 轮 Codex 只读实现复审并修复：fence 与状态观测同源、所有观测失败一律不可 fence、status/write 两侧字节预算同账、暂存源快照在发布点复核、最终拒绝成为持久终态、普通 status 不再二次哈希；第 72 轮 `VERDICT: PASS`。2026-11-21/22 交付 `17b6745`（三次 upstream rebase 后，`0.30.251`），plugin fixture/receipt/receiver contract 指向 `17b6745af530a9df01e37e31e6845a00064c2f75`；`DEFER-LVC06-01`（legacy layout 检测）与 `DEFER-LVC06-02`（upstream push lease 回归）记录两条非本卡面的全量失败。REL-01 已切，LVC-03 已开工。
 
 ### Task LVC-07: Share mutation operations between UI and Agent tools
 
