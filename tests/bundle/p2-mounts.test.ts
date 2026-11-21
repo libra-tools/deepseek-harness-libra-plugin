@@ -153,7 +153,7 @@ describe("workspace lease binding", () => {
     await vi.waitFor(() => {
       expect(mount.binding.getHandle("w-1")).toBeUndefined();
     });
-    mount.dispose();
+    await mount.dispose();
   });
 
   it("links forked sessions to the parent workspace lease", async () => {
@@ -171,7 +171,7 @@ describe("workspace lease binding", () => {
       expect(mount.binding.getHandle("w-child")).toBeDefined();
     });
     expect(mount.binding.getHandle("w-child")?.parent_session_id).toBe("w-parent");
-    mount.dispose();
+    await mount.dispose();
   });
 });
 

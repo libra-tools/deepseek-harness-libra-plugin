@@ -37,6 +37,8 @@ export interface OutboxMountOptions {
    * so a session bound elsewhere must not have its events captured here.
    */
   serves?: (session: Session) => boolean;
+  /** Allow cleanup of a session whose current cwd no longer serves this pool. */
+  servesDisposal?: (session: Session) => boolean;
 }
 
 /**
@@ -63,6 +65,7 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
   const disposers: Array<() => unknown> = [];
   const namespace = createHash("sha256").update(options.repositoryRoot).digest("hex");
   const serves = options.serves ?? (() => true);
+  const servesDisposal = options.servesDisposal ?? serves;
   const root = options.outboxRoot ?? defaultOutboxRoot();
   const namespaceRoot = join(root, namespace);
   const locks = new Map<string, GenerationClaim>();
@@ -222,7 +225,7 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
     });
   }));
   disposers.push(ctx.on("session/disposed", (session) => {
-    if (!serves(session)) return;
+    if (!servesDisposal(session)) return;
     const state = ensureProjection(session);
     state.disposing = true;
     const previous = retiring.get(String(session.id));

@@ -272,12 +272,16 @@ rl.on("line", (line) => {
     return;
   }
   if (frame.method === "vcs.identity") {
-    respond(frame, {
-      worktree_root_hash: createHash("sha256").update(process.cwd()).digest("hex"),
-      worktree_id: `wt-${createHash("sha256").update(process.cwd()).digest("hex").slice(0, 12)}`,
-      head_oid: null,
-      branch: "main",
-      unborn: true,
+    writeResponse({
+      jsonrpc: "2.0",
+      result: {
+        worktree_root_hash: createHash("sha256").update(process.cwd()).digest("hex"),
+        worktree_id: `wt-${createHash("sha256").update(process.cwd()).digest("hex").slice(0, 12)}`,
+        head_oid: null,
+        branch: "main",
+        unborn: true,
+      },
+      id,
     });
     return;
   }

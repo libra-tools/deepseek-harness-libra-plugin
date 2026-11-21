@@ -10,7 +10,7 @@ import type {
   ToolResult,
 } from "./types.js";
 
-const TOOL_CATALOG: ToolDefinition[] = [
+export const TOOL_CATALOG: ToolDefinition[] = [
   {
     name: "libra_context",
     bridge_method: "context.get",

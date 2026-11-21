@@ -23,9 +23,12 @@ import {
 import {
   readLive,
   resolveDeployment,
+  resolveExecutable as findExecutable,
   type DeploymentConfig,
   type ResolvedDeployment,
 } from "./deployment.js";
+import { applyPerSession } from "./repository-runtime.js";
+import type { WorkingDirectoryService } from "./repository-binding.js";
 
 /** Cordis identity used by the DSH loader. */
 export const name = "@libra-tools/dsh-bundle";
@@ -43,6 +46,9 @@ export {
   type BindingFailure,
   type BindResult,
   type BridgeEvidence,
+  type BridgeEvidenceSnapshot,
+  type LibraBridgeEvidenceService,
+  type LibraRepositoryBindingService,
   type RepositoryBinding,
   type RepositoryIdentity,
   RepositoryRegistry,
@@ -309,13 +315,15 @@ interface MemoryMountOptions {
    * so a session bound elsewhere must not recall or record here.
    */
   serves?: (session: Session) => boolean;
+  /** Register the shared projection unit; a per-repository pool owns it once. */
+  registerProjection?: boolean;
 }
 
 async function mountMemory(
   ctx: Context,
   bridge: BridgeClient,
   options: MemoryMountOptions,
-): Promise<{ dispose: () => Promise<void>; wait: (session: Session) => Promise<void>; retire: (session: Session) => Promise<void> }> {
+): Promise<{ dispose: () => Promise<void>; wait: (session: Session) => Promise<void>; retire: (session: Session) => Promise<void>; track: (session: Session) => void }> {
   let stopping = false;
   const serves = options.serves ?? (() => true);
   const sessions = new Map<Session, LiveSessionState>();
@@ -462,7 +470,7 @@ async function mountMemory(
     if (options.captureEpisodes?.() === true && !negotiated.methods.includes("memory.episode.record")) {
       throw new Error("Libra bridge does not advertise memory.episode.record");
     }
-    if (projections !== undefined) {
+    if (projections !== undefined && options.registerProjection !== false) {
       listenerDisposers.push(projections.register(libraMemoryProjection));
     }
     listenerDisposers.push(ctx.on("session/created", (session) => {
@@ -537,6 +545,7 @@ async function mountMemory(
   }
 
   return {
+    track: (session) => { if (serves(session)) trackSession(session); },
     wait: async (session) => { await sessions.get(session)?.capture; },
     retire,
     dispose: async () => {
@@ -591,7 +600,7 @@ function followDeployment(
  * Missing or unusable locations leave the plugin inert instead of failing
  * the profile. A later settings change is picked up on the next session.
  */
-export async function apply(ctx: Context, config: Config): Promise<() => Promise<void>> {
+async function applyForConfiguredRoot(ctx: Context, config: Config): Promise<() => Promise<void>> {
   let runtime: { dispose: () => Promise<void> } | undefined;
   let starting: Promise<void> | undefined;
   let warned = false;
@@ -678,7 +687,7 @@ export async function apply(ctx: Context, config: Config): Promise<() => Promise
         if (toolsRuntime !== undefined) {
           disposers.push(registerLibraTools(
             toolsRuntime,
-            tools,
+            async () => tools,
             ctx.get("approval") as ApprovalService | undefined,
           ));
         }
@@ -718,4 +727,32 @@ export async function apply(ctx: Context, config: Config): Promise<() => Promise
     await runtime?.dispose();
     runtime = undefined;
   };
+}
+
+/**
+ * DSH 0.2.2 provides the Host-owned `workingDirectory` service. It is required
+ * for session-bound mode; an explicitly configured legacy root remains only
+ * as a compatibility path for direct compositions without that service.
+ */
+export async function apply(ctx: Context, config: Config): Promise<() => Promise<void>> {
+  const workingDirectory = ctx.get("workingDirectory") as WorkingDirectoryService | undefined;
+  if (workingDirectory !== undefined) {
+    return applyPerSession(ctx, config, workingDirectory, {
+      pluginName: name,
+      bridgeEnv,
+      mountMemory,
+    });
+  }
+
+  const explicitRoot = readLive(config.repositoryRoot)?.trim() || process.env.LIBRA_REPO?.trim();
+  if (explicitRoot !== undefined && explicitRoot.length > 0) {
+    return applyForConfiguredRoot(ctx, config);
+  }
+  const executable = readLive(config.libraExecutable)?.trim() || process.env.LIBRA_BINARY?.trim();
+  if (executable !== undefined && executable.length > 0 && await findExecutable(executable) === undefined) {
+    ctx.logger.warn(`libra: Libra executable not found or not executable: ${executable}; plugin inactive`);
+  } else {
+    ctx.logger.warn("libra: Host workingDirectory is unavailable; plugin inactive");
+  }
+  return async () => undefined;
 }

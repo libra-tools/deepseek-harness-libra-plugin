@@ -92,6 +92,7 @@ async function searchPath(name: string): Promise<string | undefined> {
  */
 export async function resolveDeployment(
   config: DeploymentConfig,
+  trustedWorkingDirectory?: string,
 ): Promise<{ deployment?: ResolvedDeployment; reason?: string }> {
   const configuredBinary = blank(readLive(config.libraExecutable)) ?? blank(process.env.LIBRA_BINARY);
   if (!configuredBinary) return { reason: "no libra executable configured (libraExecutable or LIBRA_BINARY)" };
@@ -100,7 +101,8 @@ export async function resolveDeployment(
     return { reason: `libra executable not found or not executable: ${configuredBinary}` };
   }
 
-  const configuredRepository = blank(readLive(config.repositoryRoot))
+  const configuredRepository = trustedWorkingDirectory
+    ?? blank(readLive(config.repositoryRoot))
     ?? blank(process.env.LIBRA_REPO)
     ?? process.cwd();
   let repositoryRoot: string;

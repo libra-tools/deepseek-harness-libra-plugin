@@ -10,6 +10,7 @@
  */
 import type { Context } from "@deepseek-ai/cordis";
 import type { PreStepDecision } from "@deepseek-ai/dsh-agent";
+import type { Session } from "@deepseek-ai/dsh-session";
 import { createUserMessage } from "@deepseek-ai/dsh-llm/message";
 import type { UserMessage } from "@deepseek-ai/dsh-llm";
 import type { ToolsFacade } from "@libra/dsh-tools";
@@ -33,6 +34,10 @@ export interface ContextMountOptions {
   pluginName: string;
   /** Per-session query intent used for the initial context query. */
   intent?: string;
+  /** One mount per repository serves only its own bound sessions. */
+  serves?: (session: Session) => boolean;
+  /** Always clear per-session context state when a bound session is disposed. */
+  servesDisposal?: (session: Session) => boolean;
 }
 
 export function mountLibraContext(
@@ -45,6 +50,8 @@ export function mountLibraContext(
   const disposers: Array<() => unknown> = [];
 
   disposers.push(ctx.on("session/disposed", (session) => {
+    if (options.servesDisposal !== undefined && !options.servesDisposal(session)) return;
+    if (options.servesDisposal === undefined && options.serves !== undefined && !options.serves(session)) return;
     const sessionId = String(session.id);
     injected.delete(sessionId);
     injector.disposeSession(sessionId);
@@ -54,6 +61,7 @@ export function mountLibraContext(
     { agent, turn, step, signal },
     next,
   ): Promise<PreStepDecision> => {
+    if (options.serves !== undefined && !options.serves(agent.session)) return next();
     const decision = await next();
     if (decision.kind === "reject" || signal.aborted) return decision;
     if (step !== 1 || turn !== 1) return decision;

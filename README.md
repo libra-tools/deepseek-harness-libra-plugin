@@ -84,7 +84,7 @@ The bundle loads with a minimal config; every key is optional:
 | Key | Default | Effect |
 | --- | --- | --- |
 | `libraExecutable` | `LIBRA_BINARY` env | Absolute path, relative path, or a name on `PATH`. When neither is set, or the file cannot be executed, the plugin stays inactive (nothing is spawned; a warning is logged). |
-| `repositoryRoot` | `LIBRA_REPO` env, else cwd | Libra-initialized worktree the bridge operates in. |
+| `repositoryRoot` | unset | **Deprecated in Host mode.** Each Session binds to the Libra worktree its Host-reported working directory resolves to. This value is ignored while Harness provides `workingDirectory`; a profile without that service keeps the old single-root behavior. `LIBRA_REPO` follows the same rule. |
 | `outboxRoot` | `$DSH_HOME/libra/outbox` | Repository-scoped, generation-isolated event queues and per-session SQLite coordination locks (outside the repository). Applied when the plugin loads. |
 | `injectContext` | `true` | Inject one bounded `libra_context` snapshot on the first turn. |
 | `workspaceLeaseTtlMs` | `30000` | Workspace lease TTL; the bundle renews at half the TTL. |
@@ -92,7 +92,17 @@ The bundle loads with a minimal config; every key is optional:
 | `captureMemoryEpisodes` | `false` | Send the accepted query and final answer to a compatible bridge after a successful turn. The new local store also requires repository-local `bridge.conversationMemory=true`. |
 | `memoryModel` | `deepseek-chat` | Forwarded for older compiler-backed bridges; the new local store does not call a model. |
 
-On the Plugins page, this bundle's configuration edits the same fields. The binary path is deployment configuration and is never a model-visible parameter. Changing the binary or repository requires reloading the plugin; existing sessions are not silently moved to another repository. Capture and other mount-time fields apply when the plugin loads.
+On the Plugins page, this bundle's configuration edits the same fields. The binary path is deployment configuration and is never a model-visible parameter. The executable is resolved when a Session binds, so a change applies to Sessions that bind afterwards; existing bindings keep the binary they started with and are not silently moved. Capture and other mount-time fields apply when the plugin loads.
+
+### Session repository binding
+
+Harness owns each Session's effective working directory (`workingDirectory.get(session)`), and the plugin never accepts a repository path from the model. On a Session's first access the plugin resolves that directory, asks the Libra bridge for `vcs.identity`, and binds the Session to the reported worktree.
+
+- One bridge process serves each worktree. Sessions whose directories resolve to the same worktree share it; directories in another worktree get their own bridge, lease, outbox namespace, Memory adapter, context injector and tool facade.
+- A directory that is not a Libra repository, a bridge that cannot start or handshake, and a bridge that does not advertise `vcs.identity` are distinct failures (`not_a_repository`, `bridge_unavailable`, `unsupported_capability`). The plugin never falls back to Git, the process cwd, or another Session's repository.
+- When a bound Session's directory later resolves to a different worktree, the binding fails closed with `cwd_changed` and no request is sent there. The Host can move the Session explicitly through the `libraRepositoryBinding` service; the model has no path to it.
+- Read-only diagnostics are published as the `libraBridgeEvidence` Host service: for each live binding it reports the running worktree identity, the reference count, the resolved `libra` executable and its SHA-256, the bridge child PID, the full `initialize` result, and the loaded bundle entry path with its SHA-256. Neither service accepts a model-selected value.
+- Unloading the plugin waits for pending bindings, retires each repository runtime, then closes every bridge child.
 
 This plugin does not replace the built-in changed-files card (`dsh-workspace-changes`) or a general memory plugin such as `dsh-mnemon` / `dsh-plugin-memory`. Those may stay enabled. Libra owns repository checkpoints, commits, leases and its own Memory storage; the others own turn diffs or their own memory stores. If more than one plugin injects a user message on the first turn, Harness keeps both; Libra's section is the one whose source kind is `libra-memory` or `libra-context`.
 

@@ -6,9 +6,10 @@
  * lifetime and Host-only identity evidence — are checked without a real Libra
  * repository.
  */
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -58,11 +59,12 @@ class FakeClient {
     return { protocol: { major: 1, minor: 2 }, limits: {}, methods: this.methods, source: "libra" };
   }
 
-  async requestMethod(method: string): Promise<{ result: unknown }> {
+  async requestMethod(method: string): Promise<{ state: "success"; result: unknown }> {
     this.requests.push(method);
-    if (method !== "vcs.identity") return { result: {} };
+    if (method !== "vcs.identity") return { state: "success", result: {} };
     if (this.failure === "identity") throw new Error("not a repository");
     return {
+      state: "success",
       result: {
         worktree_id: this.identity.worktreeId,
         worktree_root_hash: this.identity.worktreeRootHash,
@@ -102,7 +104,7 @@ function registry(
   const created = FakeClient.created;
   const instance = new RepositoryRegistry({
     resolveExecutable: async () => process.execPath,
-    loadedModule: process.execPath,
+    bundleEntryPath: fileURLToPath(new URL("../../packages/bundle/src/index.ts", import.meta.url)),
     createClient: (cwd) => {
       const known = identities.get(cwd);
       const selected = known ?? identity(cwd);
@@ -167,7 +169,7 @@ describe("repository binding", () => {
     if (again.ok) return;
     expect(again.failure.kind).toBe("cwd_changed");
     // The original binding is untouched.
-    expect(instance.sessionBinding("s-1")?.key).toBe(identity(first).worktreeId);
+    expect(instance.sessionBinding("s-1")?.identity.worktreeId).toBe(identity(first).worktreeId);
   });
 
   it("reports a missing repository and a bridge without the identity method", async () => {
@@ -187,6 +189,49 @@ describe("repository binding", () => {
         expect(unsupported.failure.missing).toContain("vcs.identity");
       }
     }
+  });
+
+  it("does not add a second reference when the same session binds again", async () => {
+    const root = await fixture("repeat-bind");
+    const identities = new Map([[root, identity(root)]]);
+    const { registry: instance } = registry(identities);
+
+    const first = bindingOf(await instance.bind("s-1", root));
+    const again = bindingOf(await instance.bind("s-1", root));
+
+    expect(again).toBe(first);
+    expect(first.refs).toBe(1);
+    expect(instance.liveBindings()).toHaveLength(1);
+    await instance.release("s-1");
+    expect(instance.liveBindings()).toHaveLength(0);
+  });
+
+  it("serializes concurrent binds for one session and shares the repository bridge", async () => {
+    const root = await fixture("concurrent-bind");
+    const identities = new Map([[root, identity(root)]]);
+    const { registry: instance, created } = registry(identities);
+
+    const results = await Promise.all([
+      instance.bind("s-1", root),
+      instance.bind("s-1", root),
+    ]);
+    const first = bindingOf(results[0]!);
+    const second = bindingOf(results[1]!);
+
+    expect(second).toBe(first);
+    expect(first.refs).toBe(1);
+    expect(instance.liveBindings()).toHaveLength(1);
+    expect(created.filter((client) => !client.closed)).toHaveLength(1);
+  });
+
+  it("distinguishes an unavailable bridge from a directory without a repository", async () => {
+    const root = await fixture("unavailable");
+    const { registry: unavailable } = registry(new Map(), { failure: "connect" });
+
+    const result = await unavailable.bind("s-1", root);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.kind).toBe("bridge_unavailable");
   });
 
   it("closes a bridge only after its last session releases it", async () => {
@@ -215,7 +260,9 @@ describe("repository binding", () => {
     const evidence: BridgeEvidence = binding.evidence;
     expect(evidence.executable).toBe(process.execPath);
     expect(evidence.executableSha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(evidence.loadedModuleSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(evidence.bundleEntrySha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(evidence.bundlePackageDir).toContain("packages/bundle");
+    expect(evidence.bundleEntryPath).toContain("/packages/bundle/src/index.ts");
     expect(evidence.childPid).toBe(1000);
     expect(evidence.initialize.methods).toContain("vcs.identity");
     expect(binding.client["requests"]).toContain("vcs.identity");

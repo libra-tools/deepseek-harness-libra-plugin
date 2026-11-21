@@ -14,6 +14,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { ContentBlock } from "@deepseek-ai/dsh-llm";
+import type { Session } from "@deepseek-ai/dsh-session";
 import type { JsonValue } from "@deepseek-ai/dsh-util-values";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import type {
@@ -26,7 +27,7 @@ import type {
   ToolRunContext,
 } from "@deepseek-ai/dsh-tools";
 import type { ApprovalService } from "@deepseek-ai/dsh-user-approval";
-import { ToolsFacade } from "@libra/dsh-tools";
+import { TOOL_CATALOG, ToolsFacade } from "@libra/dsh-tools";
 import type { ToolDefinition, ToolInput, ToolResult } from "@libra/dsh-tools";
 
 /** Risks that must pass the DSH approval seam before reaching the bridge. */
@@ -150,15 +151,21 @@ function bridgeError(result: ToolResult): Error {
   return error;
 }
 
+export type ToolsResolver = (session: Session | undefined) => Promise<ToolsFacade | undefined>;
+
 async function invokeLibra(
   approval: ApprovalService | undefined,
-  tools: ToolsFacade,
+  resolveTools: ToolsResolver,
   def: ToolDefinition,
   args: Record<string, unknown>,
   exec: ToolRunContext,
 ): Promise<JsonValue> {
   const input: ToolInput = { ...args };
   const session = exec.agent?.session;
+  const tools = await resolveTools(session);
+  if (tools === undefined) {
+    throw new Error(`${def.name}: this session is not bound to an available Libra repository`);
+  }
   if (session !== undefined && def.parameters.includes("session_id")) {
     input.session_id = String(session.id);
   }
@@ -301,11 +308,11 @@ export interface ToolsService {
  */
 export function registerLibraTools(
   toolsService: ToolsService,
-  tools: ToolsFacade,
+  resolveTools: ToolsResolver,
   approval: ApprovalService | undefined,
 ): () => void {
   const disposers: Array<() => void> = [];
-  for (const def of tools.listTools()) {
+  for (const def of TOOL_CATALOG) {
     disposers.push(toolsService.register(defineTool({
       name: def.name,
       description: TOOL_DESCRIPTIONS[def.name] ?? `${def.name} (${def.bridge_method})`,
@@ -318,7 +325,7 @@ export function registerLibraTools(
       presentCall: presentCallFor(def),
       presentResult: presentResultFor(def),
       async execute(args, exec) {
-        return invokeLibra(approval, tools, def, args, exec);
+        return invokeLibra(approval, resolveTools, def, args, exec);
       },
     })) as () => void);
   }

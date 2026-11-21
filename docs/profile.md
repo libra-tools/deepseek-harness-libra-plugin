@@ -21,11 +21,19 @@ dsh plugin --profile headless add /absolute/path/to/libra-tools-dsh-bundle-0.2.0
 ```
 
 Configure `libraExecutable` with an absolute path, a relative path, or a `PATH`
-name, and set `repositoryRoot` to an initialized Libra repository. The plugin
-can also read `LIBRA_BINARY` and `LIBRA_REPO`. Without an explicit repository,
-it uses the host process's current directory, which can differ from a DSH
-session's workspace. Reload the plugin after changing the executable or
-repository.
+name. The plugin can also read `LIBRA_BINARY`.
+
+Repositories are not configured per profile in Host mode: each Session binds to
+the `.libra` worktree that DSH's `workingDirectory` reports for it, and sessions
+in other workspaces use their own bridge, lease, outbox queue and tool facade.
+A profile still carrying `repositoryRoot` or `LIBRA_REPO` keeps that value only
+as the legacy fallback for compositions without the Host
+`workingDirectory` service; the plugin logs the deprecation once. A Session
+whose directory later resolves to a different worktree fails closed until the
+Host rebinds it; the model cannot choose a repository.
+
+The executable is resolved when a Session binds, so changing it affects Sessions
+that bind afterwards.
 
 Optional settings include `outboxRoot`, `injectContext`,
 `workspaceLeaseTtlMs`, and `memoryTokenBudget`. For the new local conversation

@@ -1,4 +1,4 @@
-export { ToolsFacade } from "./facade.js";
+export { TOOL_CATALOG, ToolsFacade } from "./facade.js";
 export type {
   ApprovalDecision,
   ApprovalPolicy,
