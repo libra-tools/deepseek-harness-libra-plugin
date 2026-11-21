@@ -304,6 +304,11 @@ interface MemoryMountOptions {
   captureEpisodes?: () => boolean;
   openSession: (session: Session) => Promise<void>;
   waitSession: (session: Session) => Promise<void>;
+  /**
+   * Which sessions this mount serves. One mount exists per bound repository,
+   * so a session bound elsewhere must not recall or record here.
+   */
+  serves?: (session: Session) => boolean;
 }
 
 async function mountMemory(
@@ -312,6 +317,7 @@ async function mountMemory(
   options: MemoryMountOptions,
 ): Promise<{ dispose: () => Promise<void>; wait: (session: Session) => Promise<void>; retire: (session: Session) => Promise<void> }> {
   let stopping = false;
+  const serves = options.serves ?? (() => true);
   const sessions = new Map<Session, LiveSessionState>();
   const retirements = new Set<Promise<void>>();
   const recalls = new Set<Promise<MemoryDelivery | null>>();
@@ -460,18 +466,20 @@ async function mountMemory(
       listenerDisposers.push(projections.register(libraMemoryProjection));
     }
     listenerDisposers.push(ctx.on("session/created", (session) => {
-      if (!stopping) trackSession(session);
+      if (!stopping && serves(session)) trackSession(session);
     }));
     listenerDisposers.push(ctx.on("session/event", (session, event) => {
-      if (!stopping) captureEpisode(session, event);
+      if (!stopping && serves(session)) captureEpisode(session, event);
     }));
     listenerDisposers.push(ctx.on("session/flush", async (session) => {
+      if (!serves(session)) return;
       await sessions.get(session)?.capture;
     }));
     listenerDisposers.push(ctx.on("agent/pre-step", async (
       { agent, turn, step, signal },
       next,
     ): Promise<PreStepDecision> => {
+      if (!serves(agent.session)) return next();
       const beforeGeneration = agent.session.surface.replaceGeneration;
       const decision = await next();
       if (decision.kind === "reject" || signal.aborted) return decision;
@@ -501,6 +509,7 @@ async function mountMemory(
       { agent, turn, signal },
       next,
     ): Promise<RequestErrorAction> => {
+      if (!serves(agent.session)) return next();
       const beforeGeneration = agent.session.surface.replaceGeneration;
       const action = await next();
       const generation = agent.session.surface.replaceGeneration;
@@ -519,7 +528,9 @@ async function mountMemory(
       return action;
     }));
 
-    for (const session of ctx.sessions.list()) trackSession(session);
+    for (const session of ctx.sessions.list()) {
+      if (serves(session)) trackSession(session);
+    }
   } catch (error) {
     for (const dispose of listenerDisposers.reverse()) dispose();
     throw error;
