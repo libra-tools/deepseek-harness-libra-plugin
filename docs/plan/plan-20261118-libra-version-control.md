@@ -450,7 +450,7 @@
 
 **Task type:** `implementation`
 
-**Lifecycle / Acceptance:** `pending` / ` `
+**Lifecycle / Acceptance:** `done` / `complete`
 
 **Description:** Extend the plugin Host service with typed, bounded reads that invoke only negotiated bridge methods and retain repo binding for every request. Behavior axis: read-only Host API.
 
@@ -460,17 +460,17 @@
 
 **Acceptance criteria:**
 
-- [ ] Status/diff/log/detail Host methods use repository id from session binding, typed validated params and cursors; cannot choose another root.
-- [ ] Missing/unadvertised method yields explicit `unsupported_capability`; disconnected/permission/stale/cursor errors remain distinct.
-- [ ] Diffs preserve scope labels and truncated/binary/oversized metadata; UI refresh can cancel stale requests.
-- [ ] Host service contract is consumable by Client UI and readonly Agent tools; no duplicate CLI parsing path.
-- [ ] ER-06/ER-12/ER-14 same-card plugin README/tools/compatibility docs and website VCS-read section are updated; website source stays undeployed until REL-03.
+- [x] Status/diff/log/detail Host methods use repository id from session binding, typed validated params and cursors; cannot choose another root. `LibraVcsReadService` resolves each call through the Session's LVC-03 binding and exposes `status`/`diff`/`log`/`show`; no caller supplies a root, revision range or pathspec. The bridge methods are called only after a local validation pass (`limit` 1–100, decimal cursor ≤ 100000, one diff side selector, one SHA-1/SHA-256 oid, literal repository-relative paths ≤ 64 entries of ≤ 4096 bytes).
+- [x] Missing/unadvertised method yields explicit `unsupported_capability`; disconnected/permission/stale/cursor errors remain distinct. `VcsReadError`/`VcsHostError` kinds: `unsupported_capability` (method absent from the handshake, `LBR-AGENT-026/030`), `disconnected`, `invalid_params`, `cursor_invalid` (the one shared-code split, `LBR-AGENT-027`), `scope_mismatch` (`LBR-AGENT-032/023`), `stale_state` (`LBR-AGENT-038`), `conflict` (`LBR-AGENT-033`), `denied` (`LBR-AGENT-035`), `timeout` (`LBR-AGENT-036`), `protocol_mismatch`, `internal` (`LBR-AGENT-037`); malformed successful payloads are rejected as `internal` rather than rendered as an empty repository.
+- [x] Diffs preserve scope labels and truncated/binary/oversized metadata; UI refresh can cancel stale requests. `vcs.diff` results keep `sides`, `byteCap`, aggregate `truncated`/`truncation` and per-file `{ oldPath, patch, truncated, truncation }`; page-cap aggregate-only truncation is accepted, while a patch/metadata contradiction is rejected. Every method accepts an `AbortSignal` (plus a Client `requestId`); the Remote forwards DSH's call signal, the service tracks waiters per in-flight read and aborts the underlying bridge request when its last waiter cancels, and the client drops a cancelled request's late frame without failing the connection.
+- [x] Host service contract is consumable by Client UI and readonly Agent tools; no duplicate CLI parsing path. `LibraVcsRemote` extends the installed `TypertRemoteService` with four `@Remote` methods carrying the `session` resource reader (so DSH session access policy applies) and returns `{ ok, data } | { ok: false, error }`; `libra_vcs_status/diff/log/show` route through the same `LibraVcsReadService` via `invokeVcsReadTool`, sharing validation and typed failures. There is one implementation, no second CLI parsing path.
+- [x] ER-06/ER-12/ER-14 same-card plugin README/tools/compatibility docs and website VCS-read section are updated; website source stays undeployed until REL-03. README gained the typed-read section and four table rows, `docs/tools.md` documents the tools and rules, `docs/compatibility.md` has the typed-read row; `libra-backend` `deepseek-harness.en.md` documents the four tools and the shared namespace on `cf` (commits `3134fe4`, `03f1cc0`), unpushed and undeployed.
 
 **Verification:**
 
-- [ ] From plugin repo root: `pnpm test -- tests/bridge-client/libra-vcs-read.test.ts tests/tools/vcs-read-tools.test.ts` (new specs in existing Vitest target; new test cases marked `(new)`).
-- [ ] From plugin repo root: `pnpm typecheck && pnpm build`.
-- [ ] From `/Volumes/Data/gitmono/libra-backend`: `pnpm typecheck && pnpm build` and `pnpm exec playwright test --config=tests/e2e/playwright.config.ts tests/e2e/specs/docs.spec.ts`.
+- [x] From plugin repo root: `pnpm test -- tests/bridge-client/libra-vcs-read.test.ts tests/tools/vcs-read-tools.test.ts`. Delivered: `libra-vcs-read.test.ts` 23 passed and `vcs-read-tools.test.ts` 12 passed; the card also touches `client.ts`, so `tests/bridge-client/handshake.test.ts` gained a cancellation spec (15 passed). Full suite 196 passed / 5 skipped.
+- [x] From plugin repo root: `pnpm typecheck && pnpm build` equivalently green for this card: `tsc -b`, `eslint . --ignore-pattern .release-artifacts`, `vitest run`, `node scripts/build-bundle-dist.mjs` and `node scripts/test-contract.mjs --protocol-version 1` (29 passed / 5 skipped). The repository-wide `eslint .` still reports only the pre-existing `.release-artifacts/` files.
+- [x] From `/Volumes/Data/gitmono/libra-backend`: this card edits markdown only. The checkout's pre-existing `typecheck` failure (`tests/unit/sms/twilio.test.ts`), `@config` build failure and duplicate untracked generated `.js` routes also block the docs Playwright spec; the same condition was recorded for LVC-03 and is carried here as `DEFER-LVC04-01` because the markdown takes part in neither compiler.
 
 **Full-suite trigger:** `none` for isolated typed adapter; included in final integration full suite.
 
@@ -479,6 +479,12 @@
 **Deliverables:** typed Host service and readonly tool schemas.
 
 **Implementation write set:** `deepseek-harness-libra-plugin: packages/bundle/src/index.ts; packages/bundle/src/vcs-read.ts (new); packages/tools/src/facade.ts; packages/tools/src/vcs-read.ts (new); packages/bridge-client/src/client.ts; packages/bridge-client/src/vcs-methods.ts (new); tests/bridge-client/libra-vcs-read.test.ts (new); tests/tools/vcs-read-tools.test.ts (new); README.md; docs/tools.md; docs/compatibility.md; libra-backend: apps/tanstack-app/content/docs/getting-started/deepseek-harness.en.md (VCS read tools section; source only, do not deploy before REL-03)`. Protocol schema files are not in this write set; they stay with LVC-02 then LVC-06.
+
+**Write-set expansion (recorded during implementation):** a Client-callable namespace and a shared Agent path cannot be delivered inside the original set. Added: `packages/bundle/src/vcs-remote.ts` (new; the `libraVcs` Remote namespace), `packages/bundle/src/repository-runtime.ts` (construct the service and the namespace, pass each tool-run signal), `packages/bundle/src/libra-tools.ts` (shared-service tool routing, `sides` enum, description/parameter wiring), `packages/tools/src/index.ts` (export the read catalog and copy), `packages/bundle/package.json`, root `package.json`, `pnpm-lock.yaml` and `scripts/build-bundle-dist.mjs` (declare and externalize the pinned `@deepseek-ai/dsh-typert-protocol`), plus `tests/bridge-client/handshake.test.ts`, `tests/fixtures/fake-bridge.mjs` and `tests/bundle/tools-outbox.test.ts` for cancellation, fixture and catalog coverage.
+
+**Closeout findings:**
+
+- `DEFER-LVC04-01` — the website gate still cannot run in this checkout for the same pre-existing reasons recorded in `DEFER-LVC03-01` (`tests/unit/sms/twilio.test.ts` type errors, unresolved `@config`, duplicate untracked generated `.js` routes). This card's website change is one markdown file that neither `tsc` nor the route build consumes; the guide is committed on `cf` (`3134fe4`, `03f1cc0`) without a push or `pnpm deploy:cf`, because publication belongs to REL-03. Disposition: run the website gate and publish at REL-03 on a clean checkout.
 
 **Release write set:** `Inherited from REL-02`。
 
@@ -504,7 +510,7 @@
 
 **Split/dependency notes:** LVC-04 = Host integration, not Libra protocol LVC-02.
 
-**修订历史:** 初稿。
+**修订历史:** 2026-11-22 在 `main` 实现。四轮 Codex 只读复审（`codex exec --sandbox read-only --skip-git-repo-check`，模型 gpt-6.1-terra）关闭 8 条 P1：面板缺 Remote 入口、Agent 工具绕过 Host 服务、按消息文本误分类错误、模型输出截断不声明、共享读跨越绑定代际、diff 元数据自相矛盾、合法的 page-cap 结果被拒绝、取消的陈旧读阻塞 bridge 队列。第 4 轮 `VERDICT: PASS`，0×P0/0×P1。门禁：`vitest run` 196 passed / 5 skipped、`tsc -b`、`eslint`（既有 `.release-artifacts` 除外）、bundle build 与 protocol contract（29 passed / 5 skipped）通过。website guide 在 `libra-backend` `cf` 本地提交 `3134fe4`/`03f1cc0`，未 push、未部署；`DEFER-LVC04-01` 记录既有构建问题。下一步：LVC-05。
 
 ### Task LVC-05: Implement the read-only Libra panel
 
@@ -1017,7 +1023,9 @@ Codex 对 Libra `771e994..6651ccf` 只读审查结论 **VERDICT: FAIL**，0 项�
 | 2026-11-19 | LVC-06 | Libra `main` `6651ccf` 增加 minor 2 的 `vcs.stage/unstage/commit`。当时声称过期 fence 在写入前拒绝，后续检查发现该结论不成立（只哈希第一页且检查与写入非原子）；撤销 locally-accepted。REL-01 未切，LVC-03 仍不得开工。 | 不通过，待修复 |
 | 2026-11-20 | LVC-02 实现复审 | 30 轮 Codex 只读复审（`codex exec --sandbox read-only --skip-git-repo-check`，模型 gpt-6.1-terra）。前 29 轮各暴露 1 个 P0/P1（终态识别、拒绝标记与原始 ID 混淆、条件写入拒绝未处理、恢复路径与写回结果之间的竞态、review 存活判定、提交恢复与记录之间的窗口等），每轮修复后补回归；第 30 轮 `VERDICT: PASS`，0×P0/0×P1。 | **PASS** |
 | 2026-11-22 | LVC-03 实现复审 | 16 轮 Codex 只读复审（`codex exec --sandbox read-only --skip-git-repo-check`，模型 gpt-6.1-terra）。Rounds 1–15 关闭 45 条 P1：批准等待期间移动后仍写旧仓、Memory/context/事件捕获在移动后继续写旧仓、rebind 遗留旧 runtime 的 lease/outbox、同 worktree 兄弟目录失去服务、相对 Host 目录按进程 cwd 解析、崩溃 bridge 留在池中并报告陈旧证据、同 worktree 目录内移动泄漏引用、持久事件 spool 的红acted 缺失/权限/仓库归属/围栏/隔离/卸载顺序。每轮修复均补回归。第 16 轮 `VERDICT: PASS`，0×P0/0×P1。 | **PASS** |
+| 2026-11-22 | LVC-04 实现复审 | 4 轮 Codex 只读复审。P1：面板缺少 Client 可调用的 Typert Remote 命名空间、Agent 工具绕过 Host 服务直接打 bridge、按消息文本误分类 bridge 错误、模型输出截断不声明、in-flight 共享可跨越 rebind、diff 文件/聚合截断元数据自相矛盾、合法的 page-cap 结果被拒、取消的陈旧读占住 serialized bridge 队列。第 4 轮 `VERDICT: PASS`。 | **PASS** |
 | 2026-11-22 | LVC-03 交付 | plugin `main` 推送提交 `f348c22`/`95e9a06`/`7772955`/`5eb465d`/`04ccc3b`（含 15 个实现与修复提交）。门禁：`vitest run` 159 passed / 5 skipped（`repository-binding.test.ts` 18、`repository-pool.test.ts` 17）、`tsc -b`、`eslint`（既有 `.release-artifacts` 除外）、`build-bundle-dist`、`test-contract --protocol-version 1`（29 passed / 5 skipped）全通过。website guide `deepseek-harness.en.md` 在 `libra-backend` `cf` 本地提交 `751fcdd`，未 push、未部署（REL-03 发布）。`DEFER-LVC03-01` 记录该 checkout 的既有类型/构建问题。 | 接受（`DEFER-LVC03-01` 见 LVC-03 卡） |
+| 2026-11-22 | LVC-04 交付 | plugin `main` 提交 `4df50a3`/`fe2b2fa`/`7ddaaf8`。交付 `libraVcs` Remote 命名空间（TypertRemoteService + session resource + requestId/AbortSignal）、共享 `LibraVcsReadService`（Agent 工具同路径）、稳定码优先的错误分类、严格响应校验、模型输出字节界与真实截断元数据、取消传导到 bridge 队列。门禁：`vitest run` 196 passed / 5 skipped（`libra-vcs-read.test.ts` 23、`vcs-read-tools.test.ts` 12、`handshake.test.ts` 15）、`tsc -b`、`eslint`、bundle build、contract 29 passed / 5 skipped。website guide 在 `cf` 本地提交 `3134fe4`/`03f1cc0`，未 push、未部署；`DEFER-LVC04-01` 记录既有构建问题。 | 接受（`DEFER-LVC04-01` 见 LVC-04 卡） |
 | 2026-11-22 | REL-01 发布 | 标签 `v0.30.251` 指向 `17b6745`（`0.30.251`，三个版本面一致）并已推送；`cargo build --release` 产物 `libra --version` 为 `libra 0.30.251`，SHA-256 `6fdb3ca37a8a17ccc4f81979b7f17969b8afc0ceab7864c12cfc73d452a338a5`。证据已写入「REL-01 发布证据」。 | 接受 |
 | 2026-11-21 | LVC-06 实现复审 | 72 轮 Codex 只读复审（`codex exec --sandbox read-only --skip-git-repo-check`，模型 gpt-6.1-terra）。每轮修复后补回归：fence 与状态观测绑定、失败捕获/元数据读取/消失路径/根不可固定/目录观测一律不可 fence、字节预算在 status 与 write 两侧同账（含符号链接重试与失败读取）、暂存源快照在发布点复核、最终拒绝成为持久终态并可重放、普通 status 不再二次哈希。第 72 轮 `VERDICT: PASS`，0×P0/0×P1。 | **PASS** |
 | 2026-11-21 | LVC-06 交付 | Libra `main` `17b6745`（原始提交经三次 upstream rebase；`0.30.251`，allowlist 25→28，`PROTOCOL_MINOR` 2）；plugin fixture/receipt/receiver contract 指向 `17b6745af530a9df01e37e31e6845a00064c2f75`。门禁：`agent_bridge_vcs_test` 127、`mutation` 8、`approval` 5、`protocol` 8、`read_methods` 10、`schema` 6 全通过；`test-bridge-hooks` 构建 174 通过；`fence_tests` 17 与 `capture_budget_test` 2 通过；`cargo +nightly fmt --all --check`、`cargo clippy --all-targets --all-features -- -D warnings` 通过；双环境全量 nextest（rebase 前同内容树）12041 例，12040 通过、1 例 `DEFER-LVC06-01`；plugin `vitest` 123 通过/5 跳过、`tsc -b` 与契约脚本通过。 | 接受（`DEFER-LVC06-01` 见 LVC-06 卡） |
