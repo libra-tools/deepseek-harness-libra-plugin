@@ -47,6 +47,7 @@ export function mountLibraWorkspace(
   const timers = new Map<string, ReturnType<typeof setInterval>>();
   const claims = new Map<string, Promise<void>>();
   const leaseIds = new Set<string>();
+  const releasing = new Set<string>();
   const activeOperations = new Set<Promise<unknown>>();
   const disposers: Array<() => unknown> = [];
   let stopping = false;
@@ -92,7 +93,9 @@ export function mountLibraWorkspace(
       lease_ttl_ms: leaseTtlMs(),
     })).then(() => {
       leaseIds.add(sessionId);
-      armRenewal(sessionId);
+      // A release that started while this claim was in flight must not leave a
+      // renewal timer behind on a shared runtime.
+      if (!releasing.has(sessionId)) armRenewal(sessionId);
     }).catch((error: unknown) => {
       ctx.logger.warn(`libra-workspace: claim failed for ${sessionId}: ${String(error)}`);
     }).finally(() => {
@@ -103,17 +106,26 @@ export function mountLibraWorkspace(
   };
 
   const release = async (sessionId: string): Promise<void> => {
+    releasing.add(sessionId);
     const timer = timers.get(sessionId);
     if (timer !== undefined) {
       clearInterval(timer);
       timers.delete(sessionId);
     }
     await claims.get(sessionId);
-    if (!leaseIds.has(sessionId)) return;
-    await track(binding.releaseWithRetry(sessionId)).catch((error: unknown) => {
-      ctx.logger.warn(`libra-workspace: release failed for ${sessionId}: ${String(error)}`);
-    });
-    leaseIds.delete(sessionId);
+    // A claim may have armed its timer while this release awaited it.
+    const armed = timers.get(sessionId);
+    if (armed !== undefined) {
+      clearInterval(armed);
+      timers.delete(sessionId);
+    }
+    if (leaseIds.has(sessionId)) {
+      await track(binding.releaseWithRetry(sessionId)).catch((error: unknown) => {
+        ctx.logger.warn(`libra-workspace: release failed for ${sessionId}: ${String(error)}`);
+      });
+      leaseIds.delete(sessionId);
+    }
+    releasing.delete(sessionId);
   };
 
   disposers.push(ctx.on("session/created", (session: Session) => {

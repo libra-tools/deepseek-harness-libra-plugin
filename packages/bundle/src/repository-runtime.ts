@@ -291,12 +291,29 @@ export async function applyPerSession(
     }
   }
 
+  /**
+   * Retire the state a Session accumulated in its previous repository as soon
+   * as its Host directory no longer matches the directory recorded for it.
+   * Covers moves to a missing directory, a non-repository and a dead bridge,
+   * not only the explicit cwd_changed refusal.
+   */
+  async function retireIfMoved(session: Session, cwd: string | undefined): Promise<void> {
+    const sessionId = String(session.id);
+    const bound = registry.sessionBinding(sessionId);
+    if (bound === undefined) return;
+    const boundDirectory = registry.sessionDirectory(sessionId);
+    if (cwd !== undefined && boundDirectory !== undefined && sameDirectory(cwd, boundDirectory)) return;
+    const runtime = runtimes.get(bound.key);
+    if (runtime !== undefined) await retireSession(runtime, session);
+  }
+
   async function bindSession(session: Session): Promise<PerRepositoryRuntime | undefined> {
     if (disposed) return undefined;
     const sessionId = String(session.id);
     const cwd = readSessionWorkingDirectory(workingDirectory, session);
     if (cwd === undefined) {
       reportFailure({ kind: "no_working_directory", sessionId });
+      await retireIfMoved(session, undefined);
       return undefined;
     }
 
@@ -309,11 +326,7 @@ export async function applyPerSession(
     const result = await registry.bind(sessionId, cwd);
     if (!result.ok) {
       reportFailure(result.failure);
-      if (result.failure.kind === "cwd_changed") {
-        const stale = registry.sessionBinding(sessionId);
-        const staleRuntime = stale === undefined ? undefined : runtimes.get(stale.key);
-        if (staleRuntime !== undefined) await retireSession(staleRuntime, session);
-      }
+      await retireIfMoved(session, cwd);
       return undefined;
     }
     bindingFailures.delete(sessionId);
@@ -340,8 +353,22 @@ export async function applyPerSession(
 
   const resolveTools = async (session: Session | undefined): Promise<ToolsFacade | undefined> => {
     if (session === undefined) return undefined;
+    const sessionId = String(session.id);
+    const alreadyBound = registry.sessionBinding(sessionId) !== undefined;
+    const generationBefore = alreadyBound ? registry.sessionGeneration(sessionId) : undefined;
     const runtime = await trackBind(session);
-    if (runtime === undefined || bindingFailures.has(String(session.id))) return undefined;
+    if (runtime === undefined || bindingFailures.has(sessionId)) return undefined;
+    // Binding and runtime activation are asynchronous; a move during either
+    // must not send this call to the repository the Session left.
+    const hostDirectory = hostDirectoryOf(session);
+    const boundDirectory = registry.sessionDirectory(sessionId);
+    const generationNow = registry.sessionGeneration(sessionId);
+    if (hostDirectory === undefined || boundDirectory === undefined
+      || !sameDirectory(hostDirectory, boundDirectory)
+      || (alreadyBound && generationNow !== generationBefore)) {
+      await retireIfMoved(session, hostDirectory);
+      return undefined;
+    }
     return facades.get(runtime.binding.key);
   };
 

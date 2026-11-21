@@ -35,6 +35,7 @@ interface Harness {
   ctx: Context;
   emit: (event: "session/created" | "session/disposed", session: TestSession) => Promise<void>;
   capture: (session: TestSession, seq: number) => Promise<void>;
+  execute: (name: string, session: TestSession) => Promise<unknown>;
   warnings: string[];
   evidence: () => LibraBridgeEvidenceService;
   binding: () => LibraRepositoryBindingService;
@@ -44,12 +45,21 @@ function makeHarness(directories: Map<string, string>): Harness {
   const listeners = new Map<string, Array<(...args: never[]) => unknown>>();
   const warnings: string[] = [];
   const services = new Map<string, unknown>();
+  const definitions: Array<{ name: string; execute: (args: Record<string, unknown>, exec: unknown) => Promise<unknown> }> = [];
+  const tools = { register: (definition: unknown) => {
+    definitions.push(definition as never);
+    return () => undefined;
+  } };
   const ctx = {
     sessions: { list: () => [] },
     logger: { warn: (message: string) => warnings.push(message) },
-    get: (name: string) => (name === "workingDirectory"
-      ? { get: (session: TestSession) => directories.get(String(session.id)) }
-      : services.get(name)),
+    get: (name: string) => {
+      if (name === "workingDirectory") {
+        return { get: (session: TestSession) => directories.get(String(session.id)) };
+      }
+      if (name === "tools") return tools;
+      return services.get(name);
+    },
     on: (event: string, listener: (...args: never[]) => unknown) => {
       const entries = listeners.get(event) ?? [];
       entries.push(listener);
@@ -86,6 +96,16 @@ function makeHarness(directories: Map<string, string>): Harness {
           data: { role: "user", content: [{ type: "text", text: "hello" }], source: { kind: "user" } },
         });
       }
+    },
+    execute: async (name, target) => {
+      const definition = definitions.find((entry) => entry.name === name);
+      if (definition === undefined) throw new Error(`${name} is not registered`);
+      return definition.execute({}, {
+        agent: { session: target },
+        callId: "call-1",
+        name,
+        signal: new AbortController().signal,
+      });
     },
     evidence: () => services.get("libraBridgeEvidence") as LibraBridgeEvidenceService,
     binding: () => services.get("libraRepositoryBinding") as LibraRepositoryBindingService,
@@ -305,6 +325,52 @@ describe("Host session-to-repository pool", () => {
     await harness.emit("session/disposed", three);
     await harness.emit("session/disposed", one);
     expect(harness.evidence().bindings()).toHaveLength(0);
+  }, 60_000);
+
+  it("rejects a relative Host directory instead of resolving it against process cwd", async () => {
+    const shared = fixtureRoot("relative");
+    roots = [shared];
+    const harness = await start(new Map([["s-1", "relative/path"]]));
+
+    await harness.emit("session/created", session("s-1"));
+
+    expect(harness.evidence().failure("s-1")?.kind).toBe("not_a_repository");
+    expect(harness.evidence().bindings()).toHaveLength(0);
+  }, 60_000);
+
+  it("retires the old repository when the Host directory disappears", async () => {
+    const shared = fixtureRoot("vanished");
+    roots = [shared];
+    const directories = new Map([["s-1", shared]]);
+    const harness = await start(directories);
+    const one = session("s-1");
+
+    await harness.emit("session/created", one);
+    await harness.capture(one, 0);
+    const queuedBefore = totalQueuedFiles();
+
+    directories.set("s-1", join(shared, "gone-away"));
+    await harness.emit("session/created", one);
+    expect(harness.evidence().failure("s-1")?.kind).toBe("not_a_repository");
+
+    await harness.capture(one, 1);
+    expect(totalQueuedFiles()).toBe(queuedBefore);
+  }, 60_000);
+
+  it("refuses a tool call after the session moved to another repository", async () => {
+    const first = fixtureRoot("tools-before");
+    const second = fixtureRoot("tools-after");
+    roots = [first, second];
+    const directories = new Map([["s-1", first]]);
+    const harness = await start(directories);
+    const one = session("s-1");
+
+    await harness.emit("session/created", one);
+    await expect(harness.execute("libra_status", one)).resolves.toBeDefined();
+
+    directories.set("s-1", second);
+    await harness.emit("session/created", one);
+    await expect(harness.execute("libra_status", one)).rejects.toThrow(/not bound to an available Libra repository/);
   }, 60_000);
 
   it("keeps a bound session available after its first event", async () => {

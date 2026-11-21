@@ -219,6 +219,11 @@ export class RepositoryRegistry {
     if (this.closed) {
       return { ok: false, failure: { kind: "bridge_unavailable", sessionId, cwd: workingDirectory } };
     }
+    if (!isAbsolute(workingDirectory)) {
+      // The Host reports absolute directories; a relative value would resolve
+      // against the plugin process cwd and bind an unintended repository.
+      return { ok: false, failure: { kind: "not_a_repository", sessionId, cwd: workingDirectory } };
+    }
     let cwd: string;
     try {
       cwd = await realpath(workingDirectory);
