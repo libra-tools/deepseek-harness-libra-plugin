@@ -20,6 +20,7 @@ const limits = {
 };
 
 const methods = [
+  "vcs.identity",
   "initialize",
   "session.open",
   "event.append",
@@ -268,6 +269,16 @@ rl.on("line", (line) => {
       leasesByWorkspace.delete(lease.workspace_id);
     }
     writeResponse({ jsonrpc: "2.0", result: { ok: true }, id });
+    return;
+  }
+  if (frame.method === "vcs.identity") {
+    respond(frame, {
+      worktree_root_hash: createHash("sha256").update(process.cwd()).digest("hex"),
+      worktree_id: `wt-${createHash("sha256").update(process.cwd()).digest("hex").slice(0, 12)}`,
+      head_oid: null,
+      branch: "main",
+      unborn: true,
+    });
     return;
   }
   if (frame.method === "session.open") {
