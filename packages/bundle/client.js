@@ -598,6 +598,7 @@ globalThis.__ModuleLoader__.load({
       };
       const clearAllViews = () => {
         abortAll();
+        diagnosticsGeneration.current += 1;
         readIdentities.current.clear();
         setStatus({ entries: [], next: null });
         setHistory({ commits: [], next: null, loading: false });
@@ -659,6 +660,7 @@ globalThis.__ModuleLoader__.load({
             ok: true,
             initialized: true,
           };
+          setBinding(null);
           // The mount's own reads may already belong to a binding the Session
           // left before this first check completed. Later changes reload; the
           // first check drops only the channels whose reads prove another
@@ -688,6 +690,7 @@ globalThis.__ModuleLoader__.load({
           // the current binding; clear them and fail closed until a later
           // check succeeds.
           clearAllViews();
+          bindingState.current = { key: null, generation: null, ok: false, initialized: true };
           setBinding(null);
           setValidationFailed(true);
           setVerifying(false);
@@ -867,7 +870,7 @@ globalThis.__ModuleLoader__.load({
           errors.history !== undefined ? h("p", { role: "status" }, t(errors.history)) : null,
           history.commits.length === 0 ? h("p", null, t("panelEmpty")) : historySection(history, detail, t, loadHistory, openCommit, loadDetailMore)),
         suppressCached ? null : errors.detail !== undefined ? h("p", { role: "status" }, t(errors.detail)) : null,
-        suppressCached ? null : diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }));
+        suppressCached || validationFailed || binding !== null ? null : diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }));
     }
 
     function LibraTitle(props) {

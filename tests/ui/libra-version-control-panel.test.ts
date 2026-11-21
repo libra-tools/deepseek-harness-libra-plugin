@@ -610,13 +610,9 @@ describe("Libra panel component flows", () => {
     await panel.settle();
     expect(textOf(panel.tree)).not.toContain("/opt/libra/bin/libra");
 
-    // The diagnostics toggle is inert while the binding failure is sticky.
-    const hide = button(panel.tree, "t:diagHide");
-    hide!();
-    await panel.settle();
-    const reopen = button(panel.tree, "t:diagShow");
-    reopen!();
-    await tick();
+    // The diagnostics section is hidden entirely while the failure is sticky.
+    expect(button(panel.tree, "t:diagShow")).toBeUndefined();
+    expect(button(panel.tree, "t:diagHide")).toBeUndefined();
     expect(evidence.pendingCount()).toBe(0);
     panel.unmount();
   });
@@ -1209,6 +1205,90 @@ describe("Libra panel component flows", () => {
     await panel.settle();
     expect(textOf(panel.tree)).not.toContain("foreign-two.ts");
     expect(textOf(panel.tree)).not.toContain("page-one.ts");
+    panel.unmount();
+  });
+
+  it("cannot repopulate diagnostics after a failed binding check", async () => {
+    const tracker = remoteHarness();
+    tracker.manualBinding();
+    const tabState = tabHarness();
+    const evidence = deferredEvidence();
+    const panel = await mountPanel(tracker, tabState, () => evidence.session());
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve(logPage("first"));
+    tracker.resolveBinding({ ok: false, error: { kind: "no_working_directory", message: "unbound" } });
+    tracker.resolveBinding({ ok: false, error: { kind: "no_working_directory", message: "unbound" } });
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("t:panelUnbound");
+
+    // A pending evidence answer arrives after the failure; it must stay hidden.
+    evidence.resolveNext(evidenceOk);
+    await panel.settle();
+    expect(textOf(panel.tree)).not.toContain("/opt/libra/bin/libra");
+    expect(button(panel.tree, "t:diagShow")).toBeUndefined();
+
+    // A rejected check behaves the same way.
+    (tabState.tab.tab as { visible: boolean }).visible = false;
+    panel.render();
+    (tabState.tab.tab as { visible: boolean }).visible = true;
+    panel.render();
+    await tick();
+    tracker.rejectLatestBinding();
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("t:panelError");
+    expect(textOf(panel.tree)).not.toContain("/opt/libra/bin/libra");
+    panel.unmount();
+  });
+
+  it("cannot repopulate diagnostics after a rejected binding check", async () => {
+    const tracker = remoteHarness();
+    tracker.manualBinding();
+    const tabState = tabHarness();
+    const evidence = deferredEvidence();
+    const panel = await mountPanel(tracker, tabState, () => evidence.session());
+    tracker.take("status").resolve(statusPage([]));
+    tracker.take("log").resolve(logPage("first"));
+    tracker.rejectLatestBinding();
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("t:panelError");
+    expect(evidence.pendingCount()).toBe(1);
+
+    evidence.resolveNext(evidenceOk);
+    await panel.settle();
+    expect(textOf(panel.tree)).not.toContain("/opt/libra/bin/libra");
+    expect(button(panel.tree, "t:diagShow")).toBeUndefined();
+    panel.unmount();
+  });
+
+  it("recovers from a rejected check to the same binding", async () => {
+    const tracker = remoteHarness();
+    tracker.manualBinding();
+    const tabState = tabHarness();
+    const panel = await mountPanel(tracker, tabState, () => evidenceOk);
+    tracker.rejectPendingBinding();
+    tracker.rejectPendingBinding();
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("t:panelError");
+
+    // A later successful check for the same key/generation must reload the
+    // views cleared by the rejection instead of leaving them empty.
+    (tabState.tab.tab as { visible: boolean }).visible = false;
+    panel.render();
+    (tabState.tab.tab as { visible: boolean }).visible = true;
+    panel.render();
+    await tick();
+    tracker.resolveBinding({ ok: true, bindingKey: "key-1", generation: 1 });
+    await panel.settle();
+    await tick();
+    expect(textOf(panel.tree)).not.toContain("t:panelError");
+    const activeStatus = tracker.calls.filter((call) => call.method === "status" && !call.signal.aborted).pop();
+    const activeLog = tracker.calls.filter((call) => call.method === "log" && !call.signal.aborted).pop();
+    expect(activeStatus).toBeDefined();
+    expect(activeLog).toBeDefined();
+    activeStatus!.resolve(statusPage([{ path: "recovered-same.ts", state: "staged" }]));
+    activeLog!.resolve(logPage("recovered-same"));
+    await panel.settle();
+    expect(textOf(panel.tree)).toContain("recovered-same.ts");
     panel.unmount();
   });
 
