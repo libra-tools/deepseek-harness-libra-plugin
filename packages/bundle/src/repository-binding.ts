@@ -410,7 +410,9 @@ export class RepositoryRegistry {
       ]);
       const childPid = client.childPid;
       if (childPid === undefined) throw new Error("bridge child process is not running");
-      const evidence: BridgeEvidence = {
+      // Evidence is host-owned proof; freeze it so no later caller can rewrite
+      // the values a diagnostic reports as the running artifact.
+      const evidence: BridgeEvidence = Object.freeze({
         executable,
         executableSha256,
         childPid,
@@ -418,7 +420,7 @@ export class RepositoryRegistry {
         bundlePackageDir: packageDirectoryFor(bundleEntryPath),
         bundleEntryPath,
         bundleEntrySha256,
-      };
+      });
       return { ok: true, identity, identityKey: identityKey(identity), client, evidence };
     } catch {
       await client.close().catch(() => undefined);

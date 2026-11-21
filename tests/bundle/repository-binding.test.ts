@@ -287,6 +287,21 @@ describe("repository binding", () => {
     if (!result.ok) expect(result.failure.kind).toBe("bridge_unavailable");
   });
 
+  it("keeps reported evidence immutable", async () => {
+    const root = await fixture("frozen-evidence");
+    const identities = new Map([[root, identity(root)]]);
+    const { registry: instance } = registry(identities);
+    const binding = bindingOf(await instance.bind("s-1", root));
+    expect(Object.isFrozen(binding.evidence)).toBe(true);
+    const snapshot = Object.freeze({ ...binding.evidence });
+
+    expect(() => {
+      (snapshot as { executableSha256: string }).executableSha256 = "tampered";
+    }).toThrow(TypeError);
+    expect(binding.evidence.executableSha256).not.toBe("tampered");
+    expect(binding.evidence.childPid).toBe(1000);
+  });
+
   it("closes a bridge only after its last session releases it", async () => {
     const root = await fixture("release");
     const identities = new Map([[root, identity(root)]]);

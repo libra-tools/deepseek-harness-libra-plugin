@@ -93,6 +93,22 @@ export async function applyPerSession(
   const facades = new Map<string, ToolsFacade>();
   const pendingBinds = new Set<Promise<PerRepositoryRuntime | undefined>>();
   const pendingOperations = new Set<Promise<unknown>>();
+  const sessionTails = new Map<string, Promise<void>>();
+  const disposedSessions = new Set<string>();
+  const sessionSerial = async <T>(sessionId: string, work: () => Promise<T>): Promise<T> => {
+    const previous = sessionTails.get(sessionId) ?? Promise.resolve();
+    let unlock!: () => void;
+    const gate = new Promise<void>((resolve) => { unlock = resolve; });
+    const tail = previous.catch(() => undefined).then(() => gate);
+    sessionTails.set(sessionId, tail);
+    await previous.catch(() => undefined);
+    try {
+      return await work();
+    } finally {
+      unlock();
+      if (sessionTails.get(sessionId) === tail) sessionTails.delete(sessionId);
+    }
+  };
   const hostDisposers: Array<() => unknown> = [];
   let disposed = false;
   let warnedLegacyRoot = false;
@@ -270,14 +286,6 @@ export async function applyPerSession(
           },
         };
 
-        const disposeSession = ctx.on("session/disposed", async (session: Session) => {
-          if (!sessionOwnedBy(binding.key)(session)) return;
-          await retireSession(runtime, session);
-          await registry.release(String(session.id), async (lastBinding) => {
-            if (lastBinding.key === binding.key) await disposeRuntime(binding.key);
-          });
-        });
-        disposers.push(disposeSession);
         return runtime;
       } catch (error) {
         for (const dispose of disposers.reverse()) {
@@ -315,6 +323,11 @@ export async function applyPerSession(
 
   async function bindSession(session: Session): Promise<PerRepositoryRuntime | undefined> {
     if (disposed) return undefined;
+    return sessionSerial(String(session.id), () => bindSessionCore(session));
+  }
+
+  async function bindSessionCore(session: Session): Promise<PerRepositoryRuntime | undefined> {
+    if (disposed) return undefined;
     const sessionId = String(session.id);
     const cwd = readSessionWorkingDirectory(workingDirectory, session);
     if (cwd === undefined) {
@@ -341,6 +354,13 @@ export async function applyPerSession(
       runtime.sessions.add(sessionId);
       runtime.memory?.track(session);
       await runtime.workspace.claim(session);
+      if (disposedSessions.has(sessionId)) {
+        // The Session was disposed while its first bind was in flight; release
+        // it now instead of keeping a bridge reference until unload.
+        await retireSession(runtime, session);
+        await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
+        return undefined;
+      }
       return runtime;
     } catch (error) {
       await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
@@ -396,7 +416,7 @@ export async function applyPerSession(
       key: binding.key,
       identity: Object.freeze({ ...binding.identity }),
       sessionCount: binding.refs,
-      evidence: binding.evidence,
+      evidence: Object.freeze({ ...binding.evidence }),
     }))),
     failure: (sessionId) => {
       const failure = bindingFailures.get(sessionId);
@@ -414,7 +434,8 @@ export async function applyPerSession(
         const sessionId = typeof value === "object" && value !== null && "id" in value ? String(value.id) : "";
         return { ok: false, failure: { kind: "bridge_unavailable", sessionId, cwd: "" } };
       }
-      const work = (async () => rebindNow(value))();
+      const target = value as Session;
+      const work = (async () => sessionSerial(String(target.id), () => rebindNow(value)))();
       pendingOperations.add(work);
       try {
         return await work;
@@ -440,6 +461,9 @@ export async function applyPerSession(
       }
       const oldBinding = registry.sessionBinding(sessionId);
       const oldRuntime = oldBinding === undefined ? undefined : runtimes.get(oldBinding.key);
+      // Fence the old runtime before draining it so concurrent events and tool
+      // calls cannot enter it while the session moves.
+      bindingFailures.set(sessionId, { kind: "cwd_changed", sessionId, bound: oldBinding?.identity.worktreeId ?? "", now: "" });
       if (oldRuntime !== undefined) await retireSession(oldRuntime, session);
       const result = await registry.rebind(sessionId, cwd, async (lastBinding) => {
         await disposeRuntime(lastBinding.key);
@@ -466,6 +490,19 @@ export async function applyPerSession(
   hostDisposers.push(ctx.reflect.provide("libraRepositoryBinding", bindingService));
 
   const disposeCreated = ctx.on("session/created", (session: Session) => trackBind(session));
+  const disposeLifecycle = ctx.on("session/disposed", async (session: Session) => {
+    const sessionId = String(session.id);
+    disposedSessions.add(sessionId);
+    await sessionSerial(sessionId, async () => {
+      const bound = registry.sessionBinding(sessionId);
+      if (bound !== undefined) {
+        const runtime = runtimes.get(bound.key);
+        if (runtime !== undefined) await retireSession(runtime, session);
+        await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
+      }
+      bindingFailures.delete(sessionId);
+    });
+  });
   const disposePreStep = ctx.on("agent/pre-step", async ({ agent }, next) => {
     await trackBind(agent.session);
     return next();
@@ -478,6 +515,7 @@ export async function applyPerSession(
     disposed = true;
     disposeCreated();
     disposePreStep();
+    disposeLifecycle();
     disposeTools();
     await Promise.allSettled([...pendingBinds, ...pendingOperations, ...starting.values()]);
     await Promise.allSettled([...runtimes.values()].map((runtime) => runtime.dispose()));
