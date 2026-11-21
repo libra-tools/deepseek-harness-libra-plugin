@@ -59,6 +59,7 @@ interface PerRepositoryRuntime {
   sessions: Set<string>;
   outbox: ReturnType<typeof mountLibraOutbox>;
   workspace: ReturnType<typeof mountLibraWorkspace>;
+  tools: ToolsFacade;
   memory?: RepositoryMemoryRuntime;
   dispose: () => Promise<void>;
 }
@@ -88,7 +89,21 @@ export async function applyPerSession(
 ): Promise<() => Promise<void>> {
   const bindingFailures = new Map<string, BindingFailure>();
   const runtimes = new Map<string, PerRepositoryRuntime>();
-  const starting = new Map<string, Promise<PerRepositoryRuntime>>();
+  const runtimeTails = new Map<string, Promise<void>>();
+  const withRuntimeLock = async <T>(key: string, work: () => Promise<T>): Promise<T> => {
+    const previous = runtimeTails.get(key) ?? Promise.resolve();
+    let unlock!: () => void;
+    const gate = new Promise<void>((resolve) => { unlock = resolve; });
+    const tail = previous.catch(() => undefined).then(() => gate);
+    runtimeTails.set(key, tail);
+    await previous.catch(() => undefined);
+    try {
+      return await work();
+    } finally {
+      unlock();
+      if (runtimeTails.get(key) === tail) runtimeTails.delete(key);
+    }
+  };
   const deployments = new WeakMap<BridgeClient, ResolvedDeployment>();
   const facades = new Map<string, ToolsFacade>();
   const pendingBinds = new Set<Promise<PerRepositoryRuntime | undefined>>();
@@ -136,7 +151,7 @@ export async function applyPerSession(
   });
 
   const sessionOwnedBy = (key: string) => (session: Session): boolean =>
-    registry.sessionBinding(String(session.id))?.key === key;
+    registry.sessionBindingRecord(String(session.id))?.key === key;
   const sameDirectory = (observed: string, bound: string): boolean => {
     // The Host reports absolute paths; resolving a relative value here would
     // compare it against the plugin process cwd.
@@ -200,6 +215,10 @@ export async function applyPerSession(
   }
 
   async function disposeRuntime(key: string): Promise<void> {
+    await withRuntimeLock(key, () => disposeRuntimeNow(key));
+  }
+
+  async function disposeRuntimeNow(key: string): Promise<void> {
     const runtime = runtimes.get(key);
     if (runtime === undefined) return;
     runtimes.delete(key);
@@ -207,15 +226,14 @@ export async function applyPerSession(
   }
 
   async function ensureRuntime(binding: RepositoryBinding): Promise<PerRepositoryRuntime> {
+    return withRuntimeLock(binding.key, async () => {
     const existing = runtimes.get(binding.key);
     if (existing !== undefined && existing.binding.client === binding.client) return existing;
     if (existing !== undefined) {
       // The registry replaced a crashed bridge with a new client; the mounted
       // layers still hold the dead one, so retire them before remounting.
-      await disposeRuntime(binding.key);
+      await disposeRuntimeNow(binding.key);
     }
-    const pending = starting.get(binding.key);
-    if (pending !== undefined) return pending;
 
     const work = (async (): Promise<PerRepositoryRuntime> => {
       const deployment = deployments.get(binding.client);
@@ -226,6 +244,7 @@ export async function applyPerSession(
       let outbox: ReturnType<typeof mountLibraOutbox> | undefined;
       let workspace: ReturnType<typeof mountLibraWorkspace> | undefined;
       let memory: RepositoryMemoryRuntime | undefined;
+      let tools: ToolsFacade | undefined;
       try {
         outbox = mountLibraOutbox(ctx, binding.client, {
           // The opaque Libra identity is stable for sessions whose cwd is a
@@ -252,7 +271,7 @@ export async function applyPerSession(
           ctx.logger.warn(`libra: bridge for ${binding.identity.worktreeId} does not advertise memory.recall; Memory module not mounted`);
         }
 
-        const tools = new ToolsFacade(binding.client, {
+        tools = new ToolsFacade(binding.client, {
           allowRead: true,
           allowWrite: true,
           allowRestore: true,
@@ -281,6 +300,7 @@ export async function applyPerSession(
           sessions: new Set(),
           outbox,
           workspace,
+          tools: tools!,
           ...(memory !== undefined ? { memory } : {}),
           dispose: async () => {
             for (const dispose of disposers.reverse()) {
@@ -290,7 +310,7 @@ export async function applyPerSession(
                 ctx.logger.warn(`libra: repository runtime shutdown failed (${binding.identity.worktreeId}): ${String(error)}`);
               }
             }
-            facades.delete(binding.key);
+            if (facades.get(binding.key) === tools) facades.delete(binding.key);
           },
         };
 
@@ -299,18 +319,14 @@ export async function applyPerSession(
         for (const dispose of disposers.reverse()) {
           try { await dispose(); } catch { /* best-effort partial mount cleanup */ }
         }
-        facades.delete(binding.key);
+        if (tools !== undefined && facades.get(binding.key) === tools) facades.delete(binding.key);
         throw error;
       }
     })();
-    starting.set(binding.key, work);
-    try {
-      const runtime = await work;
-      runtimes.set(binding.key, runtime);
-      return runtime;
-    } finally {
-      starting.delete(binding.key);
-    }
+    const runtime = await work;
+    runtimes.set(binding.key, runtime);
+    return runtime;
+    });
   }
 
   /**
@@ -321,11 +337,11 @@ export async function applyPerSession(
    */
   async function retireIfMoved(session: Session, cwd: string | undefined): Promise<void> {
     const sessionId = String(session.id);
-    const bound = registry.sessionBinding(sessionId);
-    if (bound === undefined) return;
+    const record = registry.sessionBindingRecord(sessionId);
+    if (record === undefined) return;
     const boundDirectory = registry.sessionDirectory(sessionId);
     if (cwd !== undefined && boundDirectory !== undefined && sameDirectory(cwd, boundDirectory)) return;
-    const runtime = runtimes.get(bound.key);
+    const runtime = runtimes.get(record.key);
     if (runtime !== undefined) await retireSession(runtime, session);
   }
 
@@ -548,9 +564,9 @@ export async function applyPerSession(
     const sessionId = String(session.id);
     disposedSessions.add(sessionId);
     await sessionSerial(sessionId, async () => {
-      const bound = registry.sessionBinding(sessionId);
-      if (bound !== undefined) {
-        const runtime = runtimes.get(bound.key);
+      const record = registry.sessionBindingRecord(sessionId);
+      if (record !== undefined) {
+        const runtime = runtimes.get(record.key);
         if (runtime !== undefined) await retireSession(runtime, session);
         await registry.release(sessionId, async (lastBinding) => disposeRuntime(lastBinding.key));
       }
@@ -574,7 +590,7 @@ export async function applyPerSession(
     disposeLifecycle();
     disposeEventBuffer();
     disposeTools();
-    await Promise.allSettled([...pendingBinds, ...pendingOperations, ...starting.values()]);
+    await Promise.allSettled([...pendingBinds, ...pendingOperations, ...runtimeTails.values()]);
     await Promise.allSettled([...runtimes.values()].map((runtime) => runtime.dispose()));
     runtimes.clear();
     facades.clear();

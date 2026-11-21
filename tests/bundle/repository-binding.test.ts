@@ -330,6 +330,41 @@ describe("repository binding", () => {
     expect(instance.liveBindings()).toHaveLength(0);
   });
 
+  it("releases a crashed pool when every attached session is disposed", async () => {
+    const root = await fixture("crash-release");
+    const identities = new Map([[root, identity(root)]]);
+    const { registry: instance } = registry(identities);
+    const binding = bindingOf(await instance.bind("s-1", root));
+    bindingOf(await instance.bind("s-2", root));
+    (binding.client as unknown as { connected: boolean }).connected = false;
+
+    await instance.release("s-1");
+    expect(binding.refs).toBe(1);
+    await instance.release("s-2");
+    expect(instance.liveBindings()).toHaveLength(0);
+  });
+
+  it("keeps the cwd_changed guard after a shared bridge crashed", async () => {
+    const first = await fixture("crash-guard-a");
+    const second = await fixture("crash-guard-b");
+    const identities = new Map([
+      [first, identity(first)],
+      [second, identity(second)],
+    ]);
+    const { registry: instance } = registry(identities);
+    const binding = bindingOf(await instance.bind("s-1", first));
+    bindingOf(await instance.bind("s-2", first));
+    (binding.client as unknown as { connected: boolean }).connected = false;
+
+    // The first session replaces the crashed bridge.
+    bindingOf(await instance.bind("s-1", first));
+
+    // The second session still remembers the repository it was attached to.
+    const moved = await instance.bind("s-2", second);
+    expect(moved.ok).toBe(false);
+    if (!moved.ok) expect(moved.failure.kind).toBe("cwd_changed");
+  });
+
   it("keeps reported evidence immutable", async () => {
     const root = await fixture("frozen-evidence");
     const identities = new Map([[root, identity(root)]]);

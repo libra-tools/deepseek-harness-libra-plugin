@@ -168,6 +168,8 @@ function readIdentity(result: unknown): RepositoryIdentity | undefined {
 export class RepositoryRegistry {
   private readonly bindings = new Map<string, RepositoryBinding>();
   private readonly sessions = new Map<string, { key: string; cwd: string }>();
+  /** Identity remembered per session even while its bridge is being replaced. */
+  private readonly identities = new Map<string, { key: string; worktreeId: string; cwd: string }>();
   private readonly generations = new Map<string, number>();
   private readonly sessionTails = new Map<string, Promise<void>>();
   private readonly identityTails = new Map<string, Promise<void>>();
@@ -189,6 +191,15 @@ export class RepositoryRegistry {
     if (bound === undefined) return undefined;
     const binding = this.bindings.get(bound.key);
     return binding !== undefined && binding.client.connected ? binding : undefined;
+  }
+
+  /**
+   * The session's recorded binding key even when its bridge is disconnected,
+   * so ownership can still be released after a crash.
+   */
+  sessionBindingRecord(sessionId: string): { key: string } | undefined {
+    const bound = this.sessions.get(sessionId);
+    return bound === undefined ? undefined : { key: bound.key };
   }
 
   /** The session's own canonical directory inside its bound worktree. */
@@ -233,63 +244,52 @@ export class RepositoryRegistry {
       return { ok: false, failure: { kind: "not_a_repository", sessionId, cwd: workingDirectory } };
     }
 
-    const existing = this.sessions.get(sessionId);
-    if (existing !== undefined && existing.cwd === cwd) {
-      const binding = this.bindings.get(existing.key);
-      if (binding !== undefined) {
-        if (binding.client.connected) return { ok: true, binding };
-        // A crashed child is not a usable binding. Detach every session that
-        // referenced it and let each one bind again against a fresh bridge, so
-        // no stale reference count can outlive the replacement.
-        this.bindings.delete(binding.key);
-        for (const [attachedId, attached] of [...this.sessions]) {
-          if (attached.key !== binding.key) continue;
-          this.sessions.delete(attachedId);
-          this.advanceGeneration(attachedId);
-        }
-        await this.withLock(this.identityTails, binding.key, async () => {
-          await binding.client.close().catch(() => undefined);
-        });
-      }
-      this.sessions.delete(sessionId);
+    const current = this.sessions.get(sessionId);
+    if (current !== undefined && current.cwd === cwd) {
+      const reuse = await this.withLock(this.identityTails, current.key, async () => {
+        const binding = this.bindings.get(current.key);
+        if (binding !== undefined && binding.client.connected) return { ok: true as const, binding };
+        if (binding !== undefined) await this.detachCrashed(binding);
+        return undefined;
+      });
+      if (reuse !== undefined) return reuse;
     }
+
     const probe = await this.identify(sessionId, cwd);
     if (!probe.ok) return probe;
 
-    if (existing !== undefined) {
-      const bound = this.bindings.get(existing.key);
-      if (bound !== undefined) {
-        await probe.client.close().catch(() => undefined);
-        if (probe.identityKey !== bound.key) {
-          return {
-            ok: false,
-            failure: {
-              kind: "cwd_changed",
-              sessionId,
-              bound: bound.identity.worktreeId,
-              now: probe.identity.worktreeId,
-            },
-          };
-        }
-        this.sessions.set(sessionId, { key: bound.key, cwd });
-        this.advanceGeneration(sessionId);
-        return { ok: true, binding: bound };
-      }
-      this.sessions.delete(sessionId);
-    }
-
-    return this.withLock(this.identityTails, probe.identityKey, async () => {
+    return this.withLock(this.identityTails, probe.identityKey, async (): Promise<BindResult> => {
       if (this.closed) {
         await probe.client.close().catch(() => undefined);
         return { ok: false, failure: { kind: "bridge_unavailable", sessionId, cwd } };
       }
+
+      // Explicit rebind clears the remembered identity before this call, so a
+      // mismatch here is a Host move that requires the Host rebind path.
+      const remembered = this.identities.get(sessionId);
+      if (remembered !== undefined && remembered.key !== probe.identityKey) {
+        await probe.client.close().catch(() => undefined);
+        return {
+          ok: false,
+          failure: {
+            kind: "cwd_changed",
+            sessionId,
+            bound: remembered.worktreeId,
+            now: probe.identity.worktreeId,
+          },
+        };
+      }
+
       const pooled = this.bindings.get(probe.identityKey);
       if (pooled !== undefined) {
-        await probe.client.close().catch(() => undefined);
-        pooled.refs += 1;
-        this.sessions.set(sessionId, { key: pooled.key, cwd });
-        this.advanceGeneration(sessionId);
-        return { ok: true, binding: pooled };
+        if (pooled.client.connected) {
+          await probe.client.close().catch(() => undefined);
+          pooled.refs += 1;
+          this.attach(sessionId, pooled, cwd);
+          return { ok: true, binding: pooled };
+        }
+        // A crashed pooled client is replaced before anyone attaches to it.
+        await this.detachCrashed(pooled);
       }
 
       const binding: RepositoryBinding = {
@@ -301,10 +301,30 @@ export class RepositoryRegistry {
         refs: 1,
       };
       this.bindings.set(binding.key, binding);
-      this.sessions.set(sessionId, { key: binding.key, cwd });
-      this.advanceGeneration(sessionId);
+      this.attach(sessionId, binding, cwd);
       return { ok: true, binding };
     });
+  }
+
+  private attach(sessionId: string, binding: RepositoryBinding, cwd: string): void {
+    this.sessions.set(sessionId, { key: binding.key, cwd });
+    this.identities.set(sessionId, {
+      key: binding.key,
+      worktreeId: binding.identity.worktreeId,
+      cwd,
+    });
+    this.advanceGeneration(sessionId);
+  }
+
+  /** Remove a crashed binding and every live attachment, keeping remembered identities. */
+  private async detachCrashed(binding: RepositoryBinding): Promise<void> {
+    this.bindings.delete(binding.key);
+    for (const [attachedId, attached] of [...this.sessions]) {
+      if (attached.key !== binding.key) continue;
+      this.sessions.delete(attachedId);
+      this.advanceGeneration(attachedId);
+    }
+    await binding.client.close().catch(() => undefined);
   }
 
   /** Drop one session's reference; drain its runtime before closing the last bridge. */
@@ -323,6 +343,9 @@ export class RepositoryRegistry {
   ): Promise<BindResult> {
     return this.withLock(this.sessionTails, sessionId, async () => {
       await this.releaseLocked(sessionId, beforeLastRelease);
+      // An explicit rebind may cross repositories; clear the remembered
+      // identity so the new discovery is accepted rather than refused.
+      this.identities.delete(sessionId);
       return this.bindLocked(sessionId, workingDirectory);
     });
   }
@@ -354,6 +377,7 @@ export class RepositoryRegistry {
     this.closed = true;
     await Promise.allSettled([...this.sessionTails.values(), ...this.identityTails.values()]);
     this.sessions.clear();
+    this.identities.clear();
     const bindings = [...this.bindings.values()];
     this.bindings.clear();
     await Promise.allSettled(bindings.map((binding) => binding.client.close()));
