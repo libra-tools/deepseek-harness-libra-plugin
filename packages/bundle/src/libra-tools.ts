@@ -188,6 +188,14 @@ async function invokeLibra(
   } else if (def.risk === "read") {
     input.operation_id ??= randomUUID();
   }
+  // Approval can wait for a person while the Host moves the Session to another
+  // repository; never send an approved write to the repository it left.
+  if (APPROVAL_RISKS.has(def.risk)) {
+    const current = await resolveTools(session);
+    if (current === undefined || current !== tools) {
+      throw new Error(`${def.name}: the Session's repository binding changed during approval; refusing ${def.risk} operation`);
+    }
+  }
   const result = await tools.invoke(def.name, input);
   if (result.status === "error") throw bridgeError(result);
   if (result.data === undefined) return {};

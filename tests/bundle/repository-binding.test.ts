@@ -21,6 +21,7 @@ import {
   readSessionWorkingDirectory,
 } from "@libra/dsh-bundle";
 import type { BridgeClient } from "@libra/dsh-bridge-client";
+import { registerLibraTools } from "../../packages/bundle/src/libra-tools.js";
 
 interface FakeClientOptions {
   identity: RepositoryIdentity;
@@ -118,6 +119,37 @@ function bindingOf(result: BindResult) {
   if (!result.ok) throw new Error(`unexpected failure: ${result.failure.kind}`);
   return result.binding;
 }
+
+describe("approval boundary", () => {
+  it("refuses an approved write when the session moved to another repository", async () => {
+    const definitions: Array<{ name: string; execute: (args: Record<string, unknown>, exec: unknown) => Promise<unknown> }> = [];
+    const service = { register: (definition: unknown) => { definitions.push(definition as never); return () => undefined; } };
+    const facade = (label: string) => ({
+      invoke: async () => ({ status: "ok", data: { label } }),
+    });
+    const before = facade("before");
+    const after = facade("after");
+    let moved = false;
+    const resolveTools = async () => (moved ? after : before);
+    const approval = {
+      request: async () => {
+        // The Host moves the Session while the person decides.
+        moved = true;
+        return "allowed-once";
+      },
+    };
+    registerLibraTools(service, resolveTools, approval as never);
+
+    const commit = definitions.find((definition) => definition.name === "libra_commit");
+    const session = { id: "s-approval", header: {}, surface: { nodes: [], replaceGeneration: 0 }, events: [] };
+    await expect(commit!.execute({ message: "x" }, {
+      agent: { session },
+      callId: "call-1",
+      name: "libra_commit",
+      signal: new AbortController().signal,
+    })).rejects.toThrow(/binding changed during approval/);
+  });
+});
 
 describe("repository binding", () => {
   it("binds two sessions to two repositories with two bridges", async () => {

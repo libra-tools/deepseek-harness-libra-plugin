@@ -492,7 +492,9 @@ async function mountMemory(
       const decision = await next();
       if (decision.kind === "reject" || signal.aborted) return decision;
       await options.waitSession(agent.session);
-      if (signal.aborted) return decision;
+      // The Host can move a Session while this listener awaited; never recall
+      // from the repository it left.
+      if (signal.aborted || !serves(agent.session)) return decision;
       const state = trackSession(agent.session);
       const generation = agent.session.surface.replaceGeneration;
       let queryText: string | undefined;
@@ -507,7 +509,7 @@ async function mountMemory(
       }
       if (!refreshDue || alreadyRefreshed(state, turn, generation)) return decision;
       const delivery = queryText === undefined ? null : await recall(state, queryText, turn);
-      if (signal.aborted) return decision;
+      if (signal.aborted || !serves(agent.session)) return decision;
       retireVisibleMemory(state.session, projectedState(state.session));
       markRefreshed(state, turn, state.session.surface.replaceGeneration);
       if (delivery === null || delivery.promptSection.length === 0) return decision;
@@ -523,11 +525,11 @@ async function mountMemory(
       const generation = agent.session.surface.replaceGeneration;
       if (signal.aborted || action?.kind !== "retry" || generation <= beforeGeneration) return action;
       await options.waitSession(agent.session);
-      if (signal.aborted) return action;
+      if (signal.aborted || !serves(agent.session)) return action;
       const state = trackSession(agent.session);
       if (state.lastQuery === undefined || alreadyRefreshed(state, turn, generation)) return action;
       const delivery = await recall(state, state.lastQuery, turn);
-      if (signal.aborted) return action;
+      if (signal.aborted || !serves(agent.session)) return action;
       retireVisibleMemory(state.session, projectedState(state.session));
       if (delivery !== null && delivery.promptSection.length > 0) {
         agent.session.append("user/message", memoryMessage(delivery), { surfaceOp: "append" });

@@ -1,4 +1,5 @@
 /** Host-owned per-Session Libra bridge lifecycle (plan-20261118 LVC-03). */
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import type { Context } from "@deepseek-ai/cordis";
@@ -114,8 +115,23 @@ export async function applyPerSession(
 
   const sessionOwnedBy = (key: string) => (session: Session): boolean =>
     registry.sessionBinding(String(session.id))?.key === key;
-  const sessionServedBy = (key: string) => (session: Session): boolean =>
-    !bindingFailures.has(String(session.id)) && registry.sessionBinding(String(session.id))?.key === key;
+  const sameDirectory = (observed: string, bound: string): boolean => {
+    if (observed === bound) return true;
+    try { return realpathSync(observed) === bound; } catch { return false; }
+  };
+  const hostDirectoryOf = (session: Session): string | undefined =>
+    readSessionWorkingDirectory(workingDirectory, session);
+  /**
+   * A session is served only while its Host directory still resolves to the
+   * bound worktree directory, so events and requests stop as soon as the Host
+   * moves the session instead of continuing against the old repository.
+   */
+  const sessionServedBy = (key: string, boundCwd: string) => (session: Session): boolean => {
+    if (bindingFailures.has(String(session.id))) return false;
+    if (registry.sessionBinding(String(session.id))?.key !== key) return false;
+    const hostDirectory = hostDirectoryOf(session);
+    return hostDirectory !== undefined && sameDirectory(hostDirectory, boundCwd);
+  };
 
   const reportFailure = (failure: BindingFailure): void => {
     const previous = bindingFailures.get(failure.sessionId);
@@ -132,6 +148,26 @@ export async function applyPerSession(
             : "the session directory now resolves to another Libra worktree; an explicit Host rebind is required";
     ctx.logger.warn(`libra: session ${failure.sessionId} is unavailable (${failure.kind}): ${advice}`);
   };
+
+  async function retireSession(runtime: PerRepositoryRuntime, session: Session): Promise<void> {
+    const sessionId = String(session.id);
+    runtime.sessions.delete(sessionId);
+    try {
+      await runtime.workspace.release(sessionId);
+    } catch (error) {
+      ctx.logger.warn(`libra: workspace lease release failed for ${sessionId}: ${String(error)}`);
+    }
+    try {
+      await runtime.outbox.retire(session);
+    } catch (error) {
+      ctx.logger.warn(`libra: outbox retirement failed for ${sessionId}: ${String(error)}`);
+    }
+    try {
+      await runtime.memory?.retire(session);
+    } catch (error) {
+      ctx.logger.warn(`libra: memory retirement failed for ${sessionId}: ${String(error)}`);
+    }
+  }
 
   async function disposeRuntime(key: string): Promise<void> {
     const runtime = runtimes.get(key);
@@ -150,7 +186,7 @@ export async function applyPerSession(
       const deployment = deployments.get(binding.client);
       if (deployment === undefined) throw new Error("bridge deployment snapshot is unavailable");
       const disposers: Array<() => unknown> = [];
-      const serves = sessionServedBy(binding.key);
+      const serves = sessionServedBy(binding.key, binding.cwd);
       const servesDisposal = sessionOwnedBy(binding.key);
       let outbox: ReturnType<typeof mountLibraOutbox> | undefined;
       let workspace: ReturnType<typeof mountLibraWorkspace> | undefined;
@@ -225,9 +261,8 @@ export async function applyPerSession(
 
         const disposeSession = ctx.on("session/disposed", async (session: Session) => {
           if (!sessionOwnedBy(binding.key)(session)) return;
-          const sessionId = String(session.id);
-          runtime.sessions.delete(sessionId);
-          await registry.release(sessionId, async (lastBinding) => {
+          await retireSession(runtime, session);
+          await registry.release(String(session.id), async (lastBinding) => {
             if (lastBinding.key === binding.key) await disposeRuntime(binding.key);
           });
         });
@@ -269,6 +304,11 @@ export async function applyPerSession(
     const result = await registry.bind(sessionId, cwd);
     if (!result.ok) {
       reportFailure(result.failure);
+      if (result.failure.kind === "cwd_changed") {
+        const stale = registry.sessionBinding(sessionId);
+        const staleRuntime = stale === undefined ? undefined : runtimes.get(stale.key);
+        if (staleRuntime !== undefined) await retireSession(staleRuntime, session);
+      }
       return undefined;
     }
     bindingFailures.delete(sessionId);
@@ -343,7 +383,8 @@ export async function applyPerSession(
         return { ok: false, failure };
       }
       const oldBinding = registry.sessionBinding(sessionId);
-      if (oldBinding !== undefined) runtimes.get(oldBinding.key)?.sessions.delete(sessionId);
+      const oldRuntime = oldBinding === undefined ? undefined : runtimes.get(oldBinding.key);
+      if (oldRuntime !== undefined) await retireSession(oldRuntime, session);
       const result = await registry.rebind(sessionId, cwd, async (lastBinding) => {
         await disposeRuntime(lastBinding.key);
       });

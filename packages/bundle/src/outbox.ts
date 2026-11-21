@@ -47,6 +47,7 @@ export interface OutboxMountOptions {
  * event, so a composition that never emits session events leaves no trace.
  */
 export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: OutboxMountOptions): {
+  retire: (session: Session) => Promise<void>;
   open: (session: Session) => Promise<void>;
   wait: (session: Session) => Promise<void>;
   setMemory: (memory: { wait: (session: Session) => Promise<void>; retire: (session: Session) => Promise<void> }) => void;
@@ -224,8 +225,11 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
       }
     });
   }));
-  disposers.push(ctx.on("session/disposed", (session) => {
-    if (!servesDisposal(session)) return;
+  const retireSession = (session: Session): Promise<void> => {
+    const id = String(session.id);
+    const running = retiring.get(id);
+    if (running !== undefined) return running;
+    if (!projections.has(session)) return Promise.resolve();
     const state = ensureProjection(session);
     state.disposing = true;
     const previous = retiring.get(String(session.id));
@@ -262,9 +266,15 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
       if (retiring.get(String(session.id)) === work) retiring.delete(String(session.id));
     });
     void work.catch((error: unknown) => ctx.logger.warn(`libra-outbox: dispose failed for ${String(session.id)}: ${String(error)}`));
+    return work;
+  };
+  disposers.push(ctx.on("session/disposed", (session) => {
+    if (!servesDisposal(session)) return;
+    void retireSession(session);
   }));
 
   return {
+    retire: retireSession,
     open: async (session) => {
       await retiring.get(String(session.id));
       const state = ensureProjection(session);

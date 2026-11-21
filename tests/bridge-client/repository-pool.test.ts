@@ -133,6 +133,10 @@ describe("Host session-to-repository pool", () => {
     return readdirSync(outboxRoot!).filter((name) => namespacePattern.test(name));
   }
 
+  function totalQueuedFiles(): number {
+    return namespaces().reduce((count, namespace) => count + queuedFiles(namespace).length, 0);
+  }
+
   function queuedFiles(namespace: string): string[] {
     return readdirSync(join(outboxRoot!, namespace), { recursive: true })
       .map(String)
@@ -212,9 +216,13 @@ describe("Host session-to-repository pool", () => {
     directories.set("s-1", second);
     await harness.emit("session/created", one);
 
+    const queuedBefore = totalQueuedFiles();
     expect(harness.evidence().failure("s-1")?.kind).toBe("cwd_changed");
     expect(harness.evidence().bindings()).toHaveLength(1);
     expect(harness.warnings.some((entry) => entry.includes("cwd_changed"))).toBe(true);
+
+    await harness.capture(one, 1);
+    expect(totalQueuedFiles()).toBe(queuedBefore);
 
     const result = await harness.binding().rebind(one);
     expect(result.ok).toBe(true);
@@ -256,6 +264,44 @@ describe("Host session-to-repository pool", () => {
     expect(harness.evidence().bindings()).toHaveLength(0);
     expect(harness.evidence().failure("s-1")?.kind).toBe("no_working_directory");
     expect(harness.warnings.some((entry) => entry.includes("no_working_directory"))).toBe(true);
+  }, 60_000);
+
+  it("retires one session's state when it leaves a shared worktree", async () => {
+    const shared = fixtureRoot("shared-rebind");
+    const moved = fixtureRoot("moved");
+    roots = [shared, moved];
+    const directories = new Map([["s-1", shared], ["s-3", shared]]);
+    const harness = await start(directories);
+    const one = session("s-1");
+    const three = session("s-3");
+
+    await harness.emit("session/created", one);
+    await harness.emit("session/created", three);
+    await harness.capture(one, 0);
+    await harness.capture(three, 1);
+    const before = harness.evidence().bindings();
+    expect(before).toHaveLength(1);
+    expect(before[0]!.sessionCount).toBe(2);
+    const oldPid = before[0]!.evidence.childPid;
+    const queuedBefore = totalQueuedFiles();
+
+    directories.set("s-3", moved);
+    const rebind = await harness.binding().rebind(three);
+    expect(rebind.ok).toBe(true);
+
+    const after = harness.evidence().bindings();
+    expect(after).toHaveLength(2);
+    const stayed = after.find((entry) => entry.identity.worktreeId === before[0]!.identity.worktreeId);
+    expect(stayed?.sessionCount).toBe(1);
+    expect(stayed?.evidence.childPid).toBe(oldPid);
+    const movedBinding = after.find((entry) => entry.key !== before[0]!.key);
+    expect(movedBinding?.sessionCount).toBe(1);
+    // The departing session's queue was drained and retired, not left to flush
+    // to the worktree it left.
+    expect(totalQueuedFiles()).toBe(queuedBefore);
+    await harness.emit("session/disposed", three);
+    await harness.emit("session/disposed", one);
+    expect(harness.evidence().bindings()).toHaveLength(0);
   }, 60_000);
 
   it("keeps a bound session available after its first event", async () => {
