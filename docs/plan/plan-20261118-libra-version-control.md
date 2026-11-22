@@ -905,13 +905,13 @@ Sixteen read-only Codex review rounds closed 30 P1 findings; round 16 returned `
 
 **Split/dependency notes:** If source APIs change, return to relevant implementation task; do not paper over contract drift with docs.
 
-**修订历史:** 初稿。
+**修订历史:** 2026-11-22 完成。插件 README 与 compatibility 记录 REL-02 tarball `0b1d6c3a…`、`dist/index.js` `742eea51…`、DSH `0.2.2-rc.5`、Libra `0.30.251` SHA-256 与 28-method 握手；Libra `COMPATIBILITY.md`/`tracing/deepseek-harness.md` 记录同一 REL-01 证据（`76d2fde`）；backend guide 明确 REL-01 不含 Memory、无 Git fallback、zh-CN 生成路由，命令页保持远端较新生成结果。`pnpm typecheck`、`pnpm build`、docs Playwright 6/6、`pnpm test` 358/358 通过；`cf` 推送 `b1f8833` 并部署 `74cdf11c-6943-4573-be89-cf560a43e8a5`，`/en` 与 `/zh-CN` 路由 HTTP 200。`DEFER-LVC09-01`（浏览器 Desktop UI）、`DEFER-LVC09-02`（live-service API/e2e）、`DEFER-LVC09-03`（插件 lint 基线）、`DEFER-LVC09-04`（pinned lifecycle checkout）记录在卡内。
 
 ## 发布分组
 
 | REL-ID | 成员卡 | 触发面 | 部署点 | 状态 |
 |---|---|---|---|---|
-| `REL-01` | LVC-02, LVC-06 | Libra bridge protocol / binary release | Libra repo release workflow, exact commit + tag/artifact according to Libra AGENTS and plan template | planned |
+| `REL-01` | LVC-02, LVC-06 | Libra bridge protocol / binary release | Libra repo release workflow, exact commit + tag/artifact according to Libra AGENTS and plan template | complete: tag `v0.30.251` / commit `17b6745af530a9df01e37e31e6845a00064c2f75`; binary `libra 0.30.251` SHA-256 `6fdb3ca37a8a17ccc4f81979b7f17969b8afc0ceab7864c12cfc73d452a338a5` |
 | `REL-02` | LVC-03, LVC-04, LVC-05, LVC-07, LVC-08 | `@libra-tools/dsh-bundle` package | After LVC-08 is locally accepted, `node scripts/pack-bundle.mjs --destination <dir>` from that commit. Do not capture `pnpm pack:bundle` stdout. LVC-05 and LVC-07 must not use this tarball for their own acceptance; they use earlier candidate packs. Must consume the REL-01 binary. | complete: from plugin `main` `8b832a2`, package `0.2.0` tarball `0b1d6c3ad1bb1e78e4fbf90fb984112a889eb58f48de1e2c9eba7a4b1db4cf11`, `dist/index.js` `742eea51b65e71faaa64affb39f5b382fba20f055546007581242ad2c8279c6d`, installed into `lvc-vcs`; composed profile points at REL-01 `libra 0.30.251` SHA-256 `6fdb3ca3…`; DSH `0.2.2-rc.5` |
 | `REL-03` | LVC-09 | DSH integration guide/navigation | website push to `cf`, `pnpm deploy:cf`; verify Cloudflare deployment history and live routes | complete: backend `cf` `b1f8833` pushed; `pnpm deploy:cf` version `74cdf11c-6943-4573-be89-cf560a43e8a5`; `/en` and `/zh-CN` deepseek-harness routes returned HTTP 200 with REL-02/0.30.251 content |
 
