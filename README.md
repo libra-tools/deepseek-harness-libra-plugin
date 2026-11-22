@@ -4,7 +4,20 @@
 
 Harness owns the agent loop, session persistence, and approval policy. Libra owns repository state, durable evidence, and storage policy. This plugin is the TypeScript client and Cordis bundle between them—it does not read Libra's database or implement a second Harness runtime.
 
-**npm:** [@libra-tools/dsh-bundle](https://www.npmjs.com/package/@libra-tools/dsh-bundle) · **This tree:** `0.2.0` (not the published `0.1.0`) · **Harness:** `^0.2.2-rc.3` · **Libra bridge fixture:** protocol 1.2
+**npm:** [@libra-tools/dsh-bundle](https://www.npmjs.com/package/@libra-tools/dsh-bundle) · **This tree / REL-02 artifact:** `0.2.0` · **DeepSeek Harness:** `0.2.2-rc.5` · **Libra:** `0.30.251` · **Bridge protocol:** 1.2
+
+## REL-02 release evidence
+
+| Item | Recorded value |
+| --- | --- |
+| Bundle | `@libra-tools/dsh-bundle@0.2.0` REL-02 tarball |
+| DeepSeek Harness | `0.2.2-rc.5` |
+| Libra bridge | `0.30.251` (REL-01), SHA-256 `6fdb3ca37a8a17ccc4f81979b7f17969b8afc0ceab7864c12cfc73d452a338a5` |
+| Bridge protocol | 1.2 (`major` 1, `minor` 2) |
+| Tarball SHA-256 | `0b1d6c3ad1bb1e78e4fbf90fb984112a889eb58f48de1e2c9eba7a4b1db4cf11` |
+| `package/dist/index.js` SHA-256 | `742eea51b65e71faaa64affb39f5b382fba20f055546007581242ad2c8279c6d` |
+
+The released bridge advertises 28 negotiated methods: `initialize`, `session.open`, `event.append`, `session.flush`, `session.close`, `evidence.append`, `provenance.append`, `context.get`, `status.get`, `diff.get`, `history.search`, `checkpoint.create`, `checkpoint.list`, `checkpoint.show`, `checkpoint.restore`, `commit.create`, `review.run`, `workspace.claim`, `workspace.renew`, `workspace.release`, `vcs.identity`, `vcs.status`, `vcs.diff`, `vcs.log`, `vcs.show`, `vcs.stage`, `vcs.unstage`, `vcs.commit`. `vcs.fence` is not advertised; writes carry the Host-issued HEAD/index/worktree fence from `vcs.status`. Memory methods are not part of this negotiated list.
 
 ## What it does
 
@@ -67,8 +80,8 @@ repository-local opt-in and a compatible development build. See
 | Component | Pin |
 | --- | --- |
 | Node.js | `>= 24.9` |
-| DeepSeek Harness | `0.2.2-rc.3` (`@deepseek-ai/dsh`, Node `>=24.9`) |
-| Libra | A build with `agent bridge --stdio`; Memory requires the negotiated extension methods and repository-local opt-in |
+| DeepSeek Harness | `0.2.2-rc.5` (`@deepseek-ai/dsh`, Node `>=24.9`) |
+| Libra | `0.30.251` (REL-01) or a build with the same typed bridge methods; Memory is not advertised by that binary and remains development-only |
 | Repository | Libra-initialized worktree (`libra init`) |
 
 Peer dependencies at runtime (all optional; provided by Harness):
@@ -122,7 +135,7 @@ dsh plugin --profile headless add /absolute/path/to/artifacts/libra-tools-dsh-bu
 ```
 
 The separate `test:lifecycle` and `test:integration` scripts target a historical
-DSH alpha.1 checkout and are not evidence for DSH `0.2.2-rc.3`.
+DSH alpha.1 checkout and are not evidence for DSH `0.2.2-rc.5`.
 
 Configure the inserted `libra` entry with deployment-owned paths:
 

@@ -7,11 +7,11 @@ from the DSH compatibility gate.
 
 | Surface | Current value | Evidence/state |
 | --- | --- | --- |
-| Libra Agent Bridge | protocol `1.2`, Libra `0.21.25` authority `a92b29e8fc9ad514ebe2e6c53216845aa059d94f` | `protocol/agent-bridge.v1.receipt.json` |
+| Libra Agent Bridge | protocol `1.2`, released Libra `0.30.251` (REL-01), SHA-256 `6fdb3ca37a8a17ccc4f81979b7f17969b8afc0ceab7864c12cfc73d452a338a5` | live `initialize`: 28 negotiated methods listed in the README; `vcs.fence` absent; Memory methods absent |
 | Protocol source | `protocol.rs` SHA256 `5a47f2dfdcf0d7ec6a0c1d97f9955cfff321a45323546f2f7a230d007bbf46dc` | historical receipt; not a receipt for the new local implementation |
 | Initialize golden frame | fixture SHA256 `b34ac2e5d9b17af4450508360c671845156a6808ebe491ec9a7036633065f753` | receipt |
-| DeepSeek Harness | `0.2.2-rc.3` (`dsh-v0.2.2-rc.3`) | `engines.dsh: ^0.2.2-rc.3`; isolated installed-runtime offline Memory test passed |
-| Bundle | `@libra-tools/dsh-bundle@0.2.0` | local build; 139 tests passed, 5 skipped; typecheck, lint and build passed |
+| DeepSeek Harness | `0.2.2-rc.5` | release acceptance profile composed with the REL-02 tarball; `engines.dsh: ^0.2.2-rc.3` |
+| Bundle | `@libra-tools/dsh-bundle@0.2.0` (REL-02) | tarball SHA-256 `0b1d6c3ad1bb1e78e4fbf90fb984112a889eb58f48de1e2c9eba7a4b1db4cf11`; `dist/index.js` `742eea51b65e71faaa64affb39f5b382fba20f055546007581242ad2c8279c6d`; full suite 334 passed / 5 skipped at release pack |
 | Session repository binding | Host `workingDirectory.get(session)` + Libra `vcs.identity` | one bridge per canonical worktree; cwd change fails closed; `libraBridgeEvidence` reports each binding's executable, PID, `initialize` and bundle entry hashes |
 | Read-only panel | `sidebar.right.pane.tab` keyed `@libra-tools/dsh-bundle/version-control`; `libraVcs` + `libraEvidence` Remote namespaces | page-type Libra tab; session-scoped rows/diff/history; bridge diagnostics from the Host record; explicit unbound/unsupported/disconnected states |
 | Capture status | outbox projection + `checkpoint.list` | panel-only read view; durable pending/acknowledged/rejected/conflict/gap plus paused/older-generation recovery/pruned-diagnostics lower bound, opaque checkpoint-id digests and a commit link only after a checkpoint `target_oid` is confirmed by `vcs.show`; unverified targets stay labelled; no complete claim from flush/close |
