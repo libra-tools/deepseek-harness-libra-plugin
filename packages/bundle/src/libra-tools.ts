@@ -36,6 +36,8 @@ import {
 import type { ToolDefinition, ToolInput, ToolResult } from "@libra/dsh-tools";
 
 /** Risks that must pass the DSH approval seam before reaching the bridge. */
+const MAX_APPROVAL_SUMMARY_BYTES = 4096;
+
 const APPROVAL_RISKS = new Set(["write", "restore", "push_publish"]);
 
 /** Model-forbidden bridge internals; never present in a parameter schema. */
@@ -74,6 +76,10 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   libra_commit: "Create a Libra commit from the current session's recorded changes.",
   libra_review: "Run a review pass over the current session's work.",
   libra_restore_checkpoint: "Restore the working tree to a recorded checkpoint (destructive; requires approval).",
+  libra_vcs_stage: "Stage literal repository-relative paths in the bound Session after user approval.",
+  libra_vcs_unstage: "Remove literal repository-relative paths from the index in the bound Session after user approval.",
+  libra_vcs_commit: "Commit the exact staged path set in the bound Session after user approval.",
+  libra_vcs_recover: "After reconciling an indeterminate write, replay the Host-retained operation using the same action, paths, and commit message. This does not create a new operation.",
 };
 
 /** Per-tool parameter descriptions (defaults to a neutral bridge hint). */
@@ -90,6 +96,13 @@ const PARAMETER_DESCRIPTIONS: Record<string, string> = {
   "libra_vcs_show.oid": "The single commit object id to show.",
   "libra_vcs_show.cursor": "Opaque next cursor from the previous file page.",
   "libra_vcs_show.limit": "File page size, 1-100.",
+  "libra_vcs_stage.paths": "Literal repository-relative paths to stage; no pathspec syntax.",
+  "libra_vcs_unstage.paths": "Literal repository-relative paths to unstage; no pathspec syntax.",
+  "libra_vcs_commit.paths": "The complete staged path set to commit.",
+  "libra_vcs_commit.message": "Commit message, required, at most 4096 UTF-8 bytes.",
+  "libra_vcs_recover.action": "The original operation: stage, unstage, or commit.",
+  "libra_vcs_recover.paths": "The exact path set from the unresolved operation.",
+  "libra_vcs_recover.message": "The exact original commit message; required when action is commit.",
   "libra_context.intent": "The intent or goal framing the context selection.",
   "libra_context.checkpoint_id": "Restrict context to this checkpoint.",
   "libra_checkpoint.limit": "Maximum number of checkpoints to return.",
@@ -281,17 +294,23 @@ async function invokeLibra(
     const approvalGeneration = scope === undefined || sessionId === undefined
       ? undefined
       : scope.generation(sessionId);
+    const reason = approvalReason(def, args);
+    if (new TextEncoder().encode(reason).length > MAX_APPROVAL_SUMMARY_BYTES) {
+      throw new Error(`${def.name}: the approval summary for this write is too large to present in full; split it into smaller writes`, {
+        cause: { code: "invalid_params" },
+      });
+    }
     const outcome = await approval.request({
       agent: exec.agent,
       toolName: def.name,
       callId: exec.callId,
-      reason: `${def.name} is a ${def.risk} operation on the Libra repository`,
+      reason,
       signal: exec.signal,
     });
     if (outcome !== "allowed-once") {
       throw new Error(`${def.name}: approval ${outcome}`, { cause: { code: "approval-denied" } });
     }
-    input.operation_id ??= randomUUID();
+    if (def.name !== "libra_vcs_recover") input.operation_id = randomUUID();
     input.approval = { decision: "approved", approver: "dsh-approval" };
     const current = await resolveTools(session);
     const generationNow = scope === undefined || sessionId === undefined
@@ -338,6 +357,23 @@ function resultText(result: DshToolResult): string {
     .filter((block): block is { type: "text"; text: string } => block.type === "text" && "text" in block)
     .map((block) => block.text)
     .join("\n");
+}
+
+/** Name the action and the exact authorized file set in the approval request. */
+function approvalReason(def: ToolDefinition, args: Record<string, unknown>): string {
+  const base = `${def.name} is a ${def.risk} operation on the Libra repository`;
+  if (!def.name.startsWith("libra_vcs_") || !def.bridge_method.startsWith("vcs.")) return base;
+  const action = def.name === "libra_vcs_recover" && typeof args.action === "string"
+    ? `recover ${args.action}`
+    : def.bridge_method.slice("vcs.".length);
+  const paths = stringPaths(args.paths);
+  // Show the complete authorized set in an unambiguous JSON encoding; a write
+  // whose summary cannot be presented in full is refused instead of approved
+  // with unshown paths.
+  const message = typeof args.message === "string" && args.message.trim().length > 0
+    ? ` with message ${JSON.stringify(args.message.trim())}`
+    : "";
+  return `${base}: ${action} ${paths.length} path(s) ${JSON.stringify(paths)}${message}`;
 }
 
 function stringPaths(value: unknown): string[] {

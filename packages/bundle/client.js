@@ -78,6 +78,21 @@ globalThis.__ModuleLoader__.load({
       diagHead: "HEAD",
       diagSessions: "Sessions on this bridge",
       diagEmptyBranch: "unborn",
+      actionStage: "Stage",
+      actionUnstage: "Unstage",
+      actionCommit: "Commit",
+      actionMessage: "Commit message",
+      actionMessagePlaceholder: "Describe this commit",
+      actionBusy: "Writing…",
+      actionStale: "Repository changed. Refreshed; try again.",
+      actionDenied: "The write was not approved.",
+      actionDone: "Write completed.",
+      actionPending: "Waiting for repository state…",
+      actionUncertain: "The write may or may not have been applied. Refresh and retry the same operation.",
+      actionTooManyPaths: "This staged set exceeds the 64-path write limit; split the commit.",
+      actionPendingLimit: "Too many unresolved repository writes are retained. Resolve an earlier write before starting another Session action.",
+      actionResolveFirst: "A previous repository write is unresolved. Reconcile its state, then use libra_vcs_recover with the original action and paths before writing again.",
+      actionRetry: "Retry write",
     };
     const zh = {
       summaryEmpty: "尚未配置 Libra bridge。",
@@ -152,6 +167,21 @@ globalThis.__ModuleLoader__.load({
       diagHead: "HEAD",
       diagSessions: "该 bridge 上的会话数",
       diagEmptyBranch: "unborn",
+      actionStage: "暂存",
+      actionUnstage: "取消暂存",
+      actionCommit: "提交",
+      actionMessage: "提交说明",
+      actionMessagePlaceholder: "描述这次提交",
+      actionBusy: "写入中…",
+      actionStale: "仓库状态已变化，已刷新；请重试。",
+      actionDenied: "该写入未获批准。",
+      actionDone: "写入完成。",
+      actionPending: "正在等待仓库状态…",
+      actionUncertain: "这次写入是否生效无法确定。已刷新；可重试同一操作。",
+      actionTooManyPaths: "暂存集合超过 64 个路径的写入上限，请拆分提交。",
+      actionPendingLimit: "待恢复的仓库写入过多；请先解决已有操作，再开始新的 Session 写入。",
+      actionResolveFirst: "仓库中有尚未确认的写入。请先核对状态，再用原动作和路径调用 libra_vcs_recover，然后继续写入。",
+      actionRetry: "重试写入",
     };
 
     function fieldStyle() {
@@ -354,19 +384,35 @@ globalThis.__ModuleLoader__.load({
       return h("h3", { style: { margin: "12px 0 6px", fontSize: "1em" } }, title);
     }
 
-    function statusGroupRow(group, selected, onOpen, t) {
-      const items = group.rows.map((entry) => h("li", { key: `${entry.state}:${entry.path}` },
-        h("button", {
-          type: "button",
-          onClick: () => onOpen(entry),
-          "aria-pressed": selected !== null && selected.path === entry.path,
-          style: {
-            font: "inherit", color: "inherit", background: "transparent", border: "none",
-            padding: 0, cursor: "pointer", textAlign: "start",
-          },
-        }, entry.oldPath === null || entry.oldPath === undefined
-          ? entry.path
-          : `${entry.oldPath} → ${entry.path}`)));
+    function statusGroupRow(group, selected, onOpen, t, actions) {
+      const write = actions ?? {};
+      const items = group.rows.map((entry) => {
+        const toggled = entry.state === "staged" ? "unstage" : "stage";
+        const label = entry.state === "staged" ? t("actionUnstage") : t("actionStage");
+        const disabled = write.busy === true || write.fenceAvailable !== true;
+        return h("li", { key: `${entry.state}:${entry.path}`, style: { display: "flex", gap: 6, alignItems: "center" } },
+          h("button", {
+            type: "button",
+            onClick: () => onOpen(entry),
+            "aria-pressed": selected !== null && selected.path === entry.path,
+            style: {
+              font: "inherit", color: "inherit", background: "transparent", border: "none",
+              padding: 0, cursor: "pointer", textAlign: "start", flex: "1 1 auto",
+            },
+          }, entry.oldPath === null || entry.oldPath === undefined
+            ? entry.path
+            : `${entry.oldPath} → ${entry.path}`),
+          h("button", {
+            type: "button",
+            onClick: () => (toggled === "stage" ? write.stage : write.unstage)(entry.path),
+            disabled,
+            style: {
+              font: "inherit", color: "inherit", background: "transparent",
+              border: "1px solid currentColor", borderRadius: 4, padding: "0 6px",
+              cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.5 : 1,
+            },
+          }, label));
+      });
       return h("div", { key: group.state },
         h("div", { style: { opacity: 0.8 } }, `${t(group.labelKey)} (${group.rows.length})`),
         h("ul", { style: { margin: "2px 0 0", paddingInlineStart: 16 } }, items));
@@ -469,6 +515,11 @@ globalThis.__ModuleLoader__.load({
     }
 
     const BINDING_FAILURES = new Set(["unbound", "not_repo", "moved", "unsupported", "disconnected"]);
+    // Dispatched-but-unanswered writes must survive a tab unmount so the panel
+    // can reconcile and replay the same operation when it reopens. Records are
+    // keyed by Session and operation id so a late response can only settle its
+    // own operation, never a newer one.
+    const pendingWriteOperations = new Map();
 
     function LibraPanel(props) {
       const t = props.t;
@@ -489,6 +540,44 @@ globalThis.__ModuleLoader__.load({
       const visibleBefore = React.useRef(tab.tab.visible);
       const [diagnostics, setDiagnostics] = React.useState({ available: false });
       const [expanded, setExpanded] = React.useState(false);
+      const [fence, setFence] = React.useState(null);
+      const [message, setMessage] = React.useState("");
+      const [writeBusy, setWriteBusy] = React.useState(false);
+      const [preparing, setPreparing] = React.useState(false);
+      const [notice, setNotice] = React.useState(null);
+      const sessionRecords = () => {
+        let records = pendingWriteOperations.get(props.sessionId);
+        if (records === undefined) {
+          records = new Map();
+          pendingWriteOperations.set(props.sessionId, records);
+        }
+        return records;
+      };
+      const latestRecord = () => {
+        const records = pendingWriteOperations.get(props.sessionId);
+        if (records === undefined || records.size === 0) return null;
+        return [...records.values()].at(-1);
+      };
+      const initialRecord = latestRecord();
+      const [uncertain, setUncertain] = React.useState(initialRecord);
+      const rememberUncertain = (record) => {
+        sessionRecords().set(record.operationId, record);
+        setUncertain((current) => current === null || current.operationId === record.operationId ? record : current);
+      };
+      const clearUncertain = (operationId) => {
+        const records = pendingWriteOperations.get(props.sessionId);
+        if (records !== undefined) {
+          records.delete(operationId);
+          if (records.size === 0) pendingWriteOperations.delete(props.sessionId);
+        }
+        setUncertain((current) => {
+          if (current === null || (operationId !== undefined && current.operationId !== operationId)) return current;
+          return latestRecord();
+        });
+      };
+      const fenceGeneration = React.useRef(0);
+      const writeAbort = React.useRef(null);
+      const prepareAbort = React.useRef(null);
       const channels = React.useRef(new Map());
       const sequence = React.useRef(0);
 
@@ -742,7 +831,245 @@ globalThis.__ModuleLoader__.load({
           });
       };
 
+      const loadFence = () => {
+        fenceGeneration.current += 1;
+        const mine = fenceGeneration.current;
+        return Promise.resolve()
+          .then(() => libra.write.fence())
+          .then((result) => {
+            if (fenceGeneration.current !== mine) return;
+            if (result !== null && result !== undefined && result.ok === true) setFence(result.data);
+            else setFence(null);
+          })
+          .catch(() => { if (fenceGeneration.current === mine) setFence(null); });
+      };
+
+      const fenceMatches = () => {
+        if (fence === null) return false;
+        const current = bindingState.current;
+        return current.ok === true
+          && fence.bindingKey === current.key
+          && fence.bindingGeneration === current.generation;
+      };
+
+      const nextOperationId = () => {
+        const uuid = globalThis.crypto?.randomUUID?.();
+        return typeof uuid === "string" && uuid.length > 0
+          ? uuid
+          : `panel-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+      };
+
+      const runWrite = (kind, params, retryOperationId, allowPreparing) => {
+        if (writeBusy || (prepareAbort.current !== null && allowPreparing !== true)) return;
+        const pending = latestRecord();
+        if (retryOperationId === undefined && pending !== null) {
+          // An unresolved earlier operation must be replayed or reconciled
+          // first; a new operation id could repeat an applied effect.
+          setUncertain(pending);
+          setNotice("actionUncertain");
+          return;
+        }
+        if (!fenceMatches()) { setNotice("actionPending"); refresh(); return; }
+        if (!pendingWriteOperations.has(props.sessionId) && pendingWriteOperations.size >= 256) {
+          setNotice("actionPendingLimit");
+          return;
+        }
+        writeAbort.current?.abort();
+        const controller = new globalThis.AbortController();
+        writeAbort.current = controller;
+        setWriteBusy(true);
+        setNotice(null);
+        const operationId = retryOperationId ?? nextOperationId();
+        const request = { ...params, expectedHead: fence.expectedHead, expectedIndex: fence.expectedIndex,
+          expectedWorktree: fence.expectedWorktree, bindingKey: fence.bindingKey,
+          bindingGeneration: fence.bindingGeneration, operationId };
+        const uncertainRecord = () => ({
+          kind, params, request, operationId,
+          bindingKey: fence.bindingKey, bindingGeneration: fence.bindingGeneration,
+        });
+        // Persist before dispatch: closing the panel aborts the response, not
+        // necessarily the mutation, so the same operation must be recoverable.
+        sessionRecords().set(operationId, uncertainRecord());
+        Promise.resolve()
+          .then(() => libra.write[kind](request, controller.signal))
+          .then((result) => {
+            if (result === undefined || result.ok !== true) {
+              const kindOfFailure = result?.error?.kind;
+              if (kindOfFailure === "cancelled") {
+                // The dispatch may already have applied; keep the persisted
+                // record for the next mount to replay after reconciliation.
+                return;
+              }
+              if (kindOfFailure === "stale_state") { clearUncertain(operationId); refresh(); setNotice("actionStale"); return; }
+              if (kindOfFailure === "denied") { clearUncertain(operationId); setNotice("actionDenied"); return; }
+              if (kindOfFailure === "conflict" && result.error.message?.includes("unresolved")) {
+                clearUncertain(operationId);
+                setNotice("actionResolveFirst");
+                return;
+              }
+              if (kindOfFailure === "timeout" || kindOfFailure === "disconnected"
+                || kindOfFailure === "bridge_unavailable" || kindOfFailure === "internal"
+                || kindOfFailure === "indeterminate") {
+                // The bridge may have applied the write before the response was
+                // lost. Keep the operation id for a safe replay and re-read truth.
+                refresh();
+                rememberUncertain(uncertainRecord());
+                setNotice("actionUncertain");
+                return;
+              }
+              // A definite pre-dispatch or bridge refusal leaves no applied
+              // effect to recover; do not retain it as uncertain.
+              clearUncertain(operationId);
+              fail(result, "write");
+              setNotice("panelError");
+              return;
+            }
+            const outcome = result.data.outcome;
+            if (outcome === "stale_state") { clearUncertain(operationId); refresh(); setNotice("actionStale"); return; }
+            if (outcome === "indeterminate") {
+              refresh();
+              rememberUncertain(uncertainRecord());
+              setNotice("actionUncertain");
+              return;
+            }
+            if (outcome === "failed") { clearUncertain(operationId); refresh(); setNotice("panelError"); return; }
+            if (outcome === "denied") { clearUncertain(operationId); setNotice("actionDenied"); return; }
+            refresh();
+            setMessage("");
+            clearUncertain(operationId);
+            setNotice("actionDone");
+          })
+          .catch(() => {
+            // A rejected Remote call may follow a dispatched write; recover it
+            // like any other uncertain outcome instead of implying no mutation.
+            refresh();
+            rememberUncertain(uncertainRecord());
+            setNotice("actionUncertain");
+          })
+          .finally(() => { if (writeAbort.current === controller) setWriteBusy(false); });
+      };
+
+      const stagePath = (path) => runWrite("stage", { paths: [path] });
+      const unstagePath = (path) => runWrite("unstage", { paths: [path] });
+      const stagedPaths = status.entries.filter((entry) => entry.state === "staged").map((entry) => entry.path);
+      const canCommit = stagedPaths.length > 0 && message.trim().length > 0 && fenceMatches()
+        && !writeBusy && !preparing && uncertain === null;
+      const loadAllStagedPaths = async (signal) => {
+        let entries = status.entries.slice();
+        let cursor = status.next;
+        while (cursor !== null) {
+          const result = await libra.call("status", { cursor }, `panel-staged-${Date.now()}`, signal);
+          if (signal.aborted) return null;
+          if (result === undefined || result.ok !== true) throw new Error("status");
+          const view = failureState(result);
+          if (view.state !== "ok") throw new Error(view.key ?? "panelError");
+          entries = entries.concat(result.data.entries);
+          cursor = result.data.cursor.next;
+        }
+        return entries.filter((entry) => entry.state === "staged").map((entry) => entry.path);
+      };
+
+      const commitAction = () => {
+        if (!canCommit || preparing || writeBusy || uncertain !== null || prepareAbort.current !== null) return;
+        const controller = new globalThis.AbortController();
+        prepareAbort.current = controller;
+        setPreparing(true);
+        Promise.resolve()
+          .then(() => loadAllStagedPaths(controller.signal))
+          .then((paths) => {
+            if (controller.signal.aborted || paths === null) return;
+            // The bridge requires the commit path set to equal every staged
+            // path, including pages the panel has not displayed yet.
+            if (paths.length > 64) {
+              refresh();
+              setNotice("actionTooManyPaths");
+              return;
+            }
+            runWrite("commit", { paths, message: message.trim() }, undefined, true);
+          })
+          .catch(() => { if (!controller.signal.aborted) setNotice("panelError"); })
+          .finally(() => {
+            if (prepareAbort.current === controller) {
+              prepareAbort.current = null;
+              setPreparing(false);
+            }
+          });
+      };
+
+      const retryUncertain = () => {
+        if (uncertain === null || writeBusy) return;
+        const current = bindingState.current;
+        if (current.ok !== true) {
+          // Identity is temporarily unavailable; keep the unresolved record
+          // so a later successful check can still replay it.
+          refresh();
+          setNotice("actionUncertain");
+          return;
+        }
+        if (current.key !== uncertain.bindingKey) {
+          // The operation belongs to another repository. Keep the record for
+          // the original binding and never send it to the current repository.
+          refresh();
+          setNotice("actionStale");
+          return;
+        }
+        // Returning to the same repository may allocate a new binding
+        // generation; the operation id and payload stay identical, so the
+        // bridge can replay its recorded result for this repository.
+        const replayRequest = {
+          ...uncertain.request,
+          bindingKey: current.key,
+          bindingGeneration: current.generation,
+        };
+        writeAbort.current?.abort();
+        const controller = new globalThis.AbortController();
+        writeAbort.current = controller;
+        setWriteBusy(true);
+        setNotice(null);
+        Promise.resolve()
+          .then(() => libra.write[uncertain.kind](replayRequest, controller.signal))
+          .then((result) => {
+            if (result === undefined || result.ok !== true) {
+              if (result?.error?.kind === "cancelled") {
+                // The retry may have been dispatched before unmount aborted it;
+                // keep the record so the next mount can replay it.
+                return;
+              }
+              if (result?.error?.kind === "stale_state" || result?.error?.kind === "denied") {
+                clearUncertain(uncertain.operationId);
+                if (result.error.kind === "stale_state") { refresh(); setNotice("actionStale"); }
+                else setNotice("actionDenied");
+                return;
+              }
+              refresh();
+              setNotice("actionUncertain");
+              return;
+            }
+            const outcome = result.data.outcome;
+            if (outcome === "stale_state") { clearUncertain(uncertain.operationId); refresh(); setNotice("actionStale"); return; }
+            if (outcome === "denied") { clearUncertain(uncertain.operationId); setNotice("actionDenied"); return; }
+            if (outcome === "failed") { clearUncertain(uncertain.operationId); refresh(); setNotice("panelError"); return; }
+            if (outcome === "indeterminate") { refresh(); setNotice("actionUncertain"); return; }
+            clearUncertain(uncertain.operationId);
+            refresh();
+            setMessage("");
+            setNotice("actionDone");
+          })
+          .catch(() => {
+            refresh();
+            setNotice("actionUncertain");
+          })
+          .finally(() => { if (writeAbort.current === controller) setWriteBusy(false); });
+      };
+
       const refresh = () => {
+        if (prepareAbort.current !== null) {
+          prepareAbort.current.abort();
+          prepareAbort.current = null;
+          // The aborted preparation's own finally will not match this ref, so
+          // clear the busy flag here or commit would stay disabled.
+          setPreparing(false);
+        }
         bindingFailureSource.current = null;
         // A refresh is a new generation for every channel: late results from the
         // previous generation (including a pending commit detail) must not land.
@@ -762,9 +1089,11 @@ globalThis.__ModuleLoader__.load({
         setDiagnostics({ available: false });
         setStatus({ entries: [], next: null });
         setHistory({ commits: [], next: null, loading: false });
+        setFence(null);
         loadStatus(null);
         loadHistory(null);
         loadDiagnostics(true);
+        loadFence();
         checkBinding();
       };
 
@@ -777,6 +1106,9 @@ globalThis.__ModuleLoader__.load({
           release();
           tab.tab.signal.removeEventListener("abort", abort);
           abortAll();
+          prepareAbort.current?.abort();
+          prepareAbort.current = null;
+          writeAbort.current?.abort();
         };
       }, []);
 
@@ -862,6 +1194,9 @@ globalThis.__ModuleLoader__.load({
           h("strong", null, t("panelTitle")),
           panelButton(t("panelRefresh"), refresh, false)),
         loading || verifying || visibleTransition ? h("p", { role: "status" }, t("panelLoading")) : null,
+        notice !== null ? h("p", { role: "status", style: { margin: "8px 0" } }, t(notice)) : null,
+        uncertain === null ? null : panelButton(t("actionRetry"), retryUncertain, writeBusy),
+        writeBusy || preparing ? h("p", { role: "status" }, t("actionBusy")) : null,
         validationFailed
           ? h("p", { role: "status", style: { margin: "8px 0" } }, t("panelError"))
           : suppressCached ? null : banner,
@@ -870,8 +1205,27 @@ globalThis.__ModuleLoader__.load({
           errors.status !== undefined ? h("p", { role: "status" }, t(errors.status)) : null,
           groups.length === 0 && errors.status === undefined ? h("p", null, t("panelEmpty")) : null,
           h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
-            groups.map((group) => statusGroupRow(group, selected, openDiff, t))),
+            groups.map((group) => statusGroupRow(group, selected, openDiff, t, {
+              stage: stagePath,
+              unstage: unstagePath,
+              busy: writeBusy,
+              fenceAvailable: fenceMatches() && uncertain === null && !preparing,
+            }))),
           status.next === null ? null : panelButton(t("statusMore"), () => loadStatus(status.next), statusLoading)),
+        suppressCached || binding !== null ? null : h("div", { style: { marginTop: 8 } },
+          h("label", { htmlFor: "libra-commit-message", style: { display: "block", marginBottom: 4 } }, t("actionMessage")),
+          h("textarea", {
+            id: "libra-commit-message",
+            value: message,
+            placeholder: t("actionMessagePlaceholder"),
+            onChange: (event) => setMessage(event.target.value),
+            rows: 2,
+            style: {
+              width: "100%", boxSizing: "border-box", font: "inherit", color: "inherit",
+              background: "transparent", border: "1px solid currentColor", borderRadius: 4, padding: 4,
+            },
+          }),
+          panelButton(t("actionCommit"), commitAction, !canCommit)),
         suppressCached || binding !== null ? null : diffSection(diff, t),
         suppressCached || binding !== null ? null : h("div", null,
           sectionHeading(t("historyTitle")),
@@ -892,6 +1246,20 @@ globalThis.__ModuleLoader__.load({
         },
         binding() {
           return remote.libraVcs.binding(sessionId);
+        },
+        write: {
+          fence() {
+            return remote.libraVcsWrite.fence(sessionId);
+          },
+          stage(params, signal) {
+            return remote.libraVcsWrite.stage(sessionId, params, signal);
+          },
+          unstage(params, signal) {
+            return remote.libraVcsWrite.unstage(sessionId, params, signal);
+          },
+          commit(params, signal) {
+            return remote.libraVcsWrite.commit(sessionId, params, signal);
+          },
         },
       };
     }

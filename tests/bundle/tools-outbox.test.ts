@@ -148,6 +148,22 @@ function makeContext(seed: TestSession[] = []): TestHarness {
   };
 }
 
+/** Session-bound composition: the Host provides workingDirectory and the
+ * bundle registers tools through the per-repository runtime. */
+function makeSessionContext(seed: TestSession[]): TestHarness {
+  const harness = makeContext(seed);
+  const ctx = harness.ctx as unknown as {
+    get: (key: string) => unknown;
+    reflect: { provide: (name: string, value: unknown) => () => void };
+  };
+  const originalGet = ctx.get.bind(ctx);
+  ctx.get = (key: string) => (key === "workingDirectory"
+    ? { get: () => repoRoot }
+    : originalGet(key));
+  ctx.reflect = { provide: () => () => undefined };
+  return harness;
+}
+
 function execStub(session: TestSession): ToolRunContext {
   return {
     agent: { session },
@@ -187,10 +203,14 @@ describe("libra tools registered as DSH tools", () => {
       "libra_restore_checkpoint",
       "libra_review",
       "libra_status",
+      "libra_vcs_commit",
       "libra_vcs_diff",
       "libra_vcs_log",
+      "libra_vcs_recover",
       "libra_vcs_show",
+      "libra_vcs_stage",
       "libra_vcs_status",
+      "libra_vcs_unstage",
     ]);
     const vcsDiff = harness.registry.find((def) => def.name === "libra_vcs_diff");
     expect(Object.keys(vcsDiff!.parameters.properties).sort()).toEqual(["limit", "oid", "paths", "sides"]);
@@ -256,6 +276,97 @@ describe("libra tools registered as DSH tools", () => {
     expect(value).toEqual({ ok: true, method: "commit.create" });
     expect(harness.approvals).toHaveLength(1);
     expect(harness.approvals[0]!.toolName).toBe("libra_commit");
+  });
+
+  it("routes an approved typed VCS write through the shared service", async () => {
+    const session = makeSession("s-vcs-write");
+    const harness = makeSessionContext([session]);
+    harness.setApproval("allowed-once");
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper });
+    const stage = harness.registry.find((def) => def.name === "libra_vcs_stage");
+    const value = await execute(stage!, {
+      paths: ["src/a.ts"],
+      // Extra caller authority fields are not in the model tool schema; even
+      // if supplied by a raw caller, the Host overwrites approval and ID.
+      operation_id: "model-controlled-id",
+      approval: { decision: "denied" },
+    }, session);
+    expect(value).toMatchObject({ outcome: "applied", paths: ["src/a.ts"] });
+    expect((value as { operationId: string }).operationId).not.toBe("model-controlled-id");
+    expect(harness.approvals).toHaveLength(1);
+    expect(harness.approvals[0]!.toolName).toBe("libra_vcs_stage");
+    expect(harness.approvals[0]!.reason).toContain("src/a.ts");
+    expect(harness.approvals[0]!.reason).toContain("stage");
+  });
+
+  it("maps a registered typed write refusal to a tool error", async () => {
+    const sessions = ["stale.txt", "denied.txt", "refuse.txt", "indeterminate.txt"]
+      .map((path) => makeSession(`s-${path}`));
+    const harness = makeSessionContext(sessions);
+    harness.setApproval("allowed-once");
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper });
+    const stage = harness.registry.find((def) => def.name === "libra_vcs_stage");
+    for (const [path, message] of [
+      ["stale.txt", /stale_state/],
+      ["denied.txt", /denied/],
+      ["refuse.txt", /failed/],
+      ["indeterminate.txt", /indeterminate/],
+    ] as const) {
+      const session = sessions.find((candidate) => candidate.id === `s-${path}`)!;
+      await expect(execute(stage!, { paths: [path] }, session)).rejects.toThrow(message);
+    }
+    expect(harness.approvals.length).toBe(4);
+  });
+
+  it("recovers an Agent write after an indeterminate bridge result", async () => {
+    const session = makeSession("s-vcs-recover");
+    const harness = makeSessionContext([session]);
+    harness.setApproval("allowed-once");
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper });
+    const stage = harness.registry.find((def) => def.name === "libra_vcs_stage");
+    const recover = harness.registry.find((def) => def.name === "libra_vcs_recover");
+    await expect(execute(stage!, { paths: ["indeterminate.txt"] }, session)).rejects.toThrow(/libra_vcs_recover/);
+    await expect(execute(stage!, { paths: ["other.txt"] }, session)).rejects.toThrow(/libra_vcs_recover/);
+    const result = await execute(recover!, { action: "stage", paths: ["indeterminate.txt"] }, session);
+    expect(result).toMatchObject({ outcome: "applied", paths: ["indeterminate.txt"] });
+    expect(harness.approvals).toHaveLength(3);
+    expect(harness.approvals[2]!.reason).toContain("recover stage");
+    expect(harness.approvals[2]!.reason).toContain("indeterminate.txt");
+  });
+
+  it("shows the complete authorized path set in the approval request", async () => {
+    const session = makeSession("s-vcs-paths");
+    const harness = makeSessionContext([session]);
+    harness.setApproval("allowed-once");
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper });
+    const stage = harness.registry.find((def) => def.name === "libra_vcs_stage");
+    const paths = Array.from({ length: 11 }, (_, index) => `dir/p${index}.txt`);
+    await execute(stage!, { paths }, session);
+    expect(harness.approvals).toHaveLength(1);
+    const reason = harness.approvals[0]!.reason;
+    expect(reason).toContain(JSON.stringify(paths));
+    expect(reason).toContain("dir/p10.txt");
+  });
+
+  it("refuses a write whose approval summary cannot show every path", async () => {
+    const session = makeSession("s-vcs-huge");
+    const harness = makeSessionContext([session]);
+    harness.setApproval("allowed-once");
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper });
+    const stage = harness.registry.find((def) => def.name === "libra_vcs_stage");
+    const paths = Array.from({ length: 64 }, (_, index) => `dir/${"x".repeat(100)}-${index}.txt`);
+    await expect(execute(stage!, { paths }, session)).rejects.toThrow(/approval summary/);
+    expect(harness.approvals).toHaveLength(0);
+  });
+
+  it("refuses a typed VCS write when DSH approval is denied", async () => {
+    const session = makeSession("s-vcs-denied");
+    const harness = makeSessionContext([session]);
+    harness.setApproval("rejected");
+    dispose = await apply(harness.ctx, { libraExecutable: wrapper });
+    const stage = harness.registry.find((def) => def.name === "libra_vcs_stage");
+    await expect(execute(stage!, { paths: ["src/a.ts"] }, session)).rejects.toThrow(/approval/);
+    expect(harness.approvals).toHaveLength(1);
   });
 
   it("skips tool registration when the host has no tools service", async () => {

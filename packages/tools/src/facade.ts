@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { BridgeClientError, type BridgeClient } from "@libra/dsh-bridge-client";
 
 import { VCS_READ_TOOLS } from "./vcs-read.js";
+import { VCS_WRITE_TOOLS } from "./vcs-write.js";
 import type {
   ApprovalPolicy,
   ApprovalDecision,
@@ -104,7 +105,7 @@ const LEGACY_TOOL_CATALOG: ToolDefinition[] = [
   },
 ];
 
-export const TOOL_CATALOG: ToolDefinition[] = [...LEGACY_TOOL_CATALOG, ...VCS_READ_TOOLS];
+export const TOOL_CATALOG: ToolDefinition[] = [...LEGACY_TOOL_CATALOG, ...VCS_READ_TOOLS, ...VCS_WRITE_TOOLS];
 
 
 const FORBIDDEN_MODEL_PARAMS = new Set([

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import type { Context } from "@deepseek-ai/cordis";
 import type { Session } from "@deepseek-ai/dsh-session";
-import { VCS_READ_TOOLS } from "@libra/dsh-tools";
+import { VCS_READ_TOOLS, VCS_WRITE_TOOLS } from "@libra/dsh-tools";
 import type { ApprovalService } from "@deepseek-ai/dsh-user-approval";
 import { BridgeClient } from "@libra/dsh-bridge-client";
 import { VcsReadMethods } from "@libra/dsh-bridge-client";
@@ -26,6 +26,7 @@ import {
 import { invokeVcsReadTool, LibraVcsReadService, VcsHostError } from "./vcs-read.js";
 import { evaluateSessionEvidence, LibraEvidenceRemote } from "./evidence-remote.js";
 import { LibraVcsRemote } from "./vcs-remote.js";
+import { invokeVcsWriteTool, LibraVcsWriteRemote, LibraVcsWriteService } from "./vcs-write.js";
 import { libraMemoryProjection } from "./memory-projection.js";
 import {
   RepositoryRegistry,
@@ -516,7 +517,7 @@ export async function applyPerSession(
     return work;
   };
 
-  const vcsReadService = new LibraVcsReadService(async (value) => {
+  const resolveVcsScope = async (value: unknown) => {
     if (typeof value !== "object" || value === null || !("id" in value)) return undefined;
     const session = value as Session;
     const sessionId = String(session.id);
@@ -524,13 +525,13 @@ export async function applyPerSession(
     if (runtime === undefined) {
       const failure = bindingFailures.get(sessionId);
       return {
-        ok: false,
+        ok: false as const,
         failure: failure ?? { kind: "bridge_unavailable", sessionId, cwd: "" } as BindingFailure,
       };
     }
     const binding = runtime.binding;
     if (!binding.client.connected) {
-      return { ok: false, failure: { kind: "bridge_unavailable", sessionId, cwd: binding.cwd } };
+      return { ok: false as const, failure: { kind: "bridge_unavailable", sessionId, cwd: binding.cwd } as BindingFailure };
     }
     const generation = registry.sessionGeneration(sessionId) ?? 0;
     const validate = async (): Promise<void> => {
@@ -542,15 +543,16 @@ export async function applyPerSession(
         || registry.sessionGeneration(sessionId) !== generation
         || !sameDirectory(hostDirectory, boundDirectory)) {
         await retireIfMoved(session, hostDirectory);
-        throw new VcsHostError("cwd_changed", "the Session repository binding changed during the read");
+        throw new VcsHostError("cwd_changed", "the Session repository binding changed during the operation");
       }
       if (!binding.client.connected) {
-        throw new VcsHostError("disconnected", "the repository bridge disconnected during the read", true);
+        throw new VcsHostError("disconnected", "the repository bridge disconnected during the operation", true);
       }
     };
     return {
       ok: true as const,
       scope: {
+        client: binding.client,
         read: new VcsReadMethods(binding.client),
         methods: binding.evidence.initialize.methods.filter((method) => method.startsWith("vcs.")),
         bindingKey: binding.key,
@@ -558,9 +560,17 @@ export async function applyPerSession(
         validate,
       },
     };
-  });
+  };
+
+  const vcsReadService = new LibraVcsReadService(resolveVcsScope);
+  const vcsWriteService = new LibraVcsWriteService(resolveVcsScope);
+  // libra-tools compares the resolved object identity across the approval wait
+  // to detect a rebind. Resolution must therefore reuse one object while the
+  // Session's binding and generation are unchanged.
+  const resolvedToolCache = new Map<string, ResolvedTools>();
 
   const vcsToolNames = new Set(VCS_READ_TOOLS.map((tool) => tool.name));
+  const vcsWriteToolNames = new Set(VCS_WRITE_TOOLS.map((tool) => tool.name));
   const resolveTools = async (session: Session | undefined): Promise<ResolvedTools | undefined> => {
     if (session === undefined) return undefined;
     const sessionId = String(session.id);
@@ -581,7 +591,10 @@ export async function applyPerSession(
     }
     const facade = facades.get(runtime.binding.key);
     if (facade === undefined) return undefined;
-    return {
+    const cacheKey = `${sessionId}\u0000${runtime.binding.key}\u0000${generationNow ?? "unbound"}`;
+    const cached = resolvedToolCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+    const resolved: ResolvedTools = {
       listTools: () => facade.listTools(),
       getPolicy: () => facade.getPolicy(),
       supports: (method) => facade.supports(method),
@@ -591,9 +604,23 @@ export async function applyPerSession(
         if (vcsToolNames.has(name)) {
           return invokeVcsReadTool(vcsReadService, session, name, params, signal);
         }
+        if (vcsWriteToolNames.has(name)) {
+          // The DSH approval gate has already added the approved decision to
+          // the tool input; the Host service validates and forwards it.
+          return invokeVcsWriteTool(vcsWriteService, session, name, params, signal, {
+            key: runtime.binding.key,
+            generation: generationNow ?? 0,
+          });
+        }
         return facade.invoke(name, params);
       },
     };
+    if (resolvedToolCache.size >= 64) {
+      const oldest = resolvedToolCache.keys().next().value;
+      if (oldest !== undefined) resolvedToolCache.delete(oldest);
+    }
+    resolvedToolCache.set(cacheKey, resolved);
+    return resolved;
   };
 
   const toolsRuntime = ctx.get("tools");
@@ -630,8 +657,12 @@ export async function applyPerSession(
   // Typert registers the Client-facing namespace with Cordis and owns its
   // disposal in this plugin context. Its Remote methods carry a Session
   // resource, so DSH checks the caller's session-level access policy.
-  new LibraVcsRemote(ctx, vcsReadService, (sessionId) =>
-    ctx.sessions.list().find((candidate) => String(candidate.id) === sessionId));
+  const lookupSession = (sessionId: string) =>
+    ctx.sessions.list().find((candidate) => String(candidate.id) === sessionId);
+  new LibraVcsRemote(ctx, vcsReadService, lookupSession);
+  // The panel's write namespace attaches the fixed user-action approval; the
+  // Agent tool path reaches the same service only after DSH approval.
+  new LibraVcsWriteRemote(ctx, vcsWriteService, lookupSession);
 
   new LibraEvidenceRemote(ctx, (sessionId) => {
     const failure = bindingFailures.get(sessionId);

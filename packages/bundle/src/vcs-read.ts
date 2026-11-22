@@ -54,6 +54,7 @@ export type VcsHostFailureKind =
   | "cursor_invalid"
   | "scope_mismatch"
   | "stale_state"
+  | "indeterminate"
   | "conflict"
   | "protocol_mismatch"
   | "denied"

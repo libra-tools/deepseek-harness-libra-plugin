@@ -33,6 +33,27 @@ import type { WorkingDirectoryService } from "./repository-binding.js";
 export { evaluateSessionEvidence, LibraEvidenceRemote } from "./evidence-remote.js";
 export type { BridgeEvidenceInfo, EvidenceResolver, EvidenceResult, SessionEvidence } from "./evidence-remote.js";
 export { LibraVcsRemote, type SessionById } from "./vcs-remote.js";
+export {
+  USER_ACTION_APPROVAL,
+  LibraVcsWriteRemote,
+  LibraVcsWriteService,
+  assertCommitMessage,
+  assertLiteralPath,
+  assertOperationId,
+  invokeVcsWriteTool,
+  normalizeFence,
+  validateWritePaths,
+  type VcsCommitRequest,
+  type VcsFenceResult,
+  type VcsStageRequest,
+  type VcsWriteApproval,
+  type VcsWriteFailure,
+  type VcsWriteOutcome,
+  type VcsWriteRemoteResult,
+  type VcsWriteResult,
+  type VcsWriteScope,
+  type VcsWriteToolResult,
+} from "./vcs-write.js";
 export { boundModelValue } from "./libra-tools.js";
 export {
   invokeVcsReadTool,

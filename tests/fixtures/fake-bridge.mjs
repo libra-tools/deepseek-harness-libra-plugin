@@ -27,6 +27,9 @@ const methods = [
   "vcs.diff",
   "vcs.log",
   "vcs.show",
+  "vcs.stage",
+  "vcs.unstage",
+  "vcs.commit",
   "initialize",
   "session.open",
   "event.append",
@@ -62,6 +65,8 @@ const leasesBySession = new Map();
 /** @type {Map<string, { session_id: string; workspace_id: string; lease_fence: number }>} */
 const leasesByWorkspace = new Map();
 const activeSessions = new Set();
+/** Operation ids that already reported an indeterminate write; a replay resolves. */
+const indeterminateOperations = new Set();
 
 /**
  * Fake repository discovery: the nearest ancestor holding `.libra`, so
@@ -304,7 +309,39 @@ rl.on("line", (line) => {
     }
     writeResponse({
       jsonrpc: "2.0",
-      result: { entries: [{ path: "src/a.ts", state: "staged", oldPath: null }], cursor: { next: null } },
+      result: {
+        entries: [{ path: "src/a.ts", state: "staged", oldPath: null }],
+        cursor: { next: null },
+        writeFence: {
+          head: "a".repeat(40),
+          indexGeneration: "b".repeat(64),
+          worktreeGeneration: "c".repeat(64),
+        },
+      },
+      id,
+    });
+    return;
+  }
+  if (frame.method === "vcs.stage" || frame.method === "vcs.unstage" || frame.method === "vcs.commit") {
+    const params = frame.params ?? {};
+    const paths = Array.isArray(params.paths) ? params.paths : [];
+    // Test modes: a path name selects a non-success outcome so the registered
+    // tool path exercises the same typed refusal mapping as the real bridge.
+    const operationId = params.operation_id;
+    const outcome = paths.includes("refuse.txt") ? "failed"
+      : paths.includes("stale.txt") ? "stale_state"
+        : paths.includes("indeterminate.txt") ? (indeterminateOperations.has(operationId) ? "applied" : "indeterminate")
+          : paths.includes("denied.txt") ? "denied" : "applied";
+    if (outcome === "indeterminate") indeterminateOperations.add(operationId);
+    writeResponse({
+      jsonrpc: "2.0",
+      result: {
+        operationId: params.operation_id,
+        outcome,
+        commitOid: frame.method === "vcs.commit" && outcome === "applied" ? "d".repeat(40) : null,
+        paths,
+        failures: [],
+      },
       id,
     });
     return;

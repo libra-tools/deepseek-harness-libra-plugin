@@ -151,17 +151,24 @@ All tools map to contract methods only—no wildcard bridge access.
 | `libra_vcs_diff` | `vcs.diff` | read | allowed |
 | `libra_vcs_log` | `vcs.log` | read | allowed |
 | `libra_vcs_show` | `vcs.show` | read | allowed |
+| `libra_vcs_stage` | `vcs.stage` | write | DSH approval required |
+| `libra_vcs_unstage` | `vcs.unstage` | write | DSH approval required |
+| `libra_vcs_commit` | `vcs.commit` | write | DSH approval required |
+| `libra_vcs_recover` | Host replays an unresolved operation | write | DSH approval required; original action and paths required |
 
-### Read-only Libra panel
+### Libra version-control panel
 
 The bundle contributes a `Libra` page tab to the right sidebar (`libra-version-control`). Open it from the sidebar guide; it is session-scoped and shows, for the active Session's bound repository:
 
 - change groups (staged, unstaged, untracked, renamed, conflicts) with counts and bounded diffs that name their comparison sides;
 - commit history with cursor pagination and per-commit file detail;
 - a diagnostics area with the live bridge evidence the Host recorded: executable path and SHA-256, child PID, negotiated protocol and method list, bundle package directory, bundle entry path and SHA-256;
-- explicit loading, empty, unbound, not-a-repository, unsupported-capability, disconnected and moved states instead of an empty repository.
+- explicit loading, empty, unbound, not-a-repository, unsupported-capability, disconnected and moved states instead of an empty repository;
+- per-file Stage/Unstage controls and a commit form for the staged set.
 
-The panel reads through the `libraVcs` Remote namespace and the `libraEvidence` diagnostics namespace; it never selects a repository, revision range or absolute path. A refresh cancels its stale page. The panel tracks the Host binding key and generation: while the tab is visible it checks them on a short interval, and when it becomes visible again it revalidates before showing cached rows, so a rebind or replacement bridge never leaves another repository's data on screen. A binding change made while the tab is visible is applied at the next check.
+The panel reads through the `libraVcs` Remote namespace and the `libraEvidence` diagnostics namespace; it writes through `libraVcsWrite`, which attaches the fixed user-action approval (a user clicking the control is the authority, and a model payload cannot call a Remote method). It never selects a repository, revision range or absolute path. A refresh cancels its stale page. The panel tracks the Host binding key and generation: while the tab is visible it checks them on a short interval, and when it becomes visible again it revalidates before showing cached rows, so a rebind or replacement bridge never leaves another repository's data on screen. A binding change made while the tab is visible is applied at the next check.
+
+Writes are fenced: the panel obtains the current HEAD/index/worktree fence from the Host and sends it back with the literal path set and an operation id. The bridge revalidates that fence before writing, so a stale fence returns `stale_state` without mutation; the panel then refreshes and asks you to retry. A successful write triggers one canonical refresh, never an optimistic row. Agent writes never supply a fence; the Host reads the current one immediately before writing.
 
 ### Typed VCS reads
 
@@ -172,6 +179,8 @@ The four `libra_vcs_*` tools and the Host `libraVcsRead` service share one imple
 - `vcs.log` returns commit summaries (`oid`, `summary`, `authorTime`) with a next cursor; `vcs.show` takes one commit object id and returns summary, parents and a paginated file list.
 
 The same service is exposed to the Client as the `libraVcs` Remote namespace (`status`, `diff`, `log`, `show`, each with a Session id the Host resolves against its live sessions), so the panel and the tools share one implementation. Both callers resolve the repository from the caller's Session binding (LVC-03), so no caller selects a root, revision range or absolute path. Parameters are validated before a request leaves the plugin (`limit` 1–100, decimal cursors up to the library's offset cap); a method the bridge did not negotiate fails as `unsupported_capability`, and disconnected, invalid-parameter, cursor, scope and stale-state failures stay distinct kinds. The Host service accepts an `AbortSignal` so a panel refresh can cancel a stale page, and identical in-flight reads are shared instead of duplicating a bridge call.
+
+The Agent write tools (`libra_vcs_stage`, `libra_vcs_unstage`, `libra_vcs_commit`, `libra_vcs_recover`) share the same Host write service as the panel, after the DSH approval gate; operation ids and approval decisions are Host-generated, the prompt lists the complete authorized path set (a write whose summary cannot be shown in full is refused), and a denial performs no bridge write. If a mutation publishes its effect and then fails internally, or a transport loses the answer after dispatch, the service replays the same operation id once: the bridge's idempotency contract reports the recorded outcome instead of writing twice; if the replay is also uncertain, or a post-dispatch validation or protocol failure follows, the service returns a non-retryable `indeterminate` error directing the caller to reconcile state and use `libra_vcs_recover` with the same action and paths. The Host keeps one unresolved operation per Session and repository, blocks new writes until recovery, and replays the exact stored bridge payload. An identical panel retry is routed through that same recovery path; a definitive refusal clears its record, while an uncertain result keeps it for another safe replay.
 
 The model-visible parameter surface is filtered: bridge internals
 (`actor`, `repository_root`, `workspace_id`, `session_id`, `operation_id`,
@@ -199,6 +208,7 @@ The installable artifact is `@libra-tools/dsh-bundle`. Internal packages are com
 - **Bridge-only:** no direct `.libra/` database or object store access from TypeScript.
 - **Fail-closed:** protocol major mismatch, actor/lease conflict, redaction uncertainty, and forbidden model parameters (e.g. `actor`, `repository_root`, `database_path`) are rejected.
 - **Redaction:** known secret patterns and oversized payloads are blocked or stripped before outbox persistence; pattern-based checks cannot guarantee removal of all secrets or personal information.
+- **Write approval:** the panel's user action carries the fixed `dsh-user-action` approver; Agent writes require the DSH approval gate and the resulting approved decision. Neither path accepts a model-supplied approval, repository root or fence shape.
 - **Actor binding:** the plugin derives `deepseek-harness:<session_id>` from the caller's session and rejects model-supplied identity fields. The local bridge trusts its stdio host and repository context; a session ID is not an authentication credential.
 
 Details: [docs/security.md](docs/security.md), [docs/privacy.md](docs/privacy.md).
