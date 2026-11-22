@@ -2,6 +2,7 @@ import type { BridgeClient } from "@libra/dsh-bridge-client";
 
 import { OutboxStore } from "./outbox.js";
 import type {
+  CaptureStatus,
   DisposeResult,
   HarnessSessionEvent,
   ProjectionMetrics,
@@ -178,6 +179,11 @@ export class SessionProjectionService {
     this.openedSessions.clear();
     this.pausedSessions.delete(sessionId);
     return { drained, warnings };
+  }
+
+  status(sessionId: string): CaptureStatus {
+    const status = this.outbox.captureStatus(sessionId);
+    return { ...status, paused: status.paused || this.pausedSessions.has(sessionId) };
   }
 
   resumeFromAck(sessionId: string): number {

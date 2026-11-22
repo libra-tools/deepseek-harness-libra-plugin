@@ -17,7 +17,7 @@ import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import type { Session } from "@deepseek-ai/dsh-session";
 import { BridgeClient } from "@libra/dsh-bridge-client";
-import { OutboxStore, SessionProjectionService } from "@libra/dsh-session";
+import { OutboxStore, SessionProjectionService, type CaptureStatus } from "@libra/dsh-session";
 
 import { acquireSessionLock, claimAbandoned, createGeneration, retireGeneration, type GenerationClaim } from "./recovery.js";
 
@@ -43,6 +43,150 @@ export interface OutboxMountOptions {
   onCaptureFailure?: (session: Session, event: { seq: number; type: string; data: unknown }) => void;
 }
 
+/** Durable snapshot fields needed to aggregate older outbox generations. */
+export interface GenerationSnapshot {
+  last_acked_seq: number;
+  entries: Array<{ event_seq: number; state: string; last_error?: string }>;
+}
+
+/**
+ * Merge capture state from older generations. A clean retired generation adds
+ * nothing; pending/rejected entries, a newer acknowledgement or an accepted
+ * sequence above the cursor keep `recovery_pending` set instead of hiding it.
+ */
+export function mergeCaptureStatus(
+  current: CaptureStatus | undefined,
+  others: readonly GenerationSnapshot[],
+): CaptureStatus | undefined {
+  const base: CaptureStatus = current ?? {
+    session_id: "",
+    pending_events: 0,
+    rejected_events: 0,
+    conflict_events: 0,
+    last_acked_seq: 0,
+    first_pending_seq: null,
+    gap: false,
+    paused: false,
+    recovery_pending: false,
+    rejected_truncated: false,
+  };
+  let pending = base.pending_events;
+  let rejected = base.rejected_events;
+  let conflict = base.conflict_events;
+  let rejectedTruncated = base.rejected_truncated;
+  let firstPending = base.first_pending_seq;
+  let lastAcked = base.last_acked_seq;
+  const observed = new Set<number>();
+  let recoveryPending = false;
+  for (const snapshot of others) {
+    lastAcked = Math.max(lastAcked, snapshot.last_acked_seq);
+    for (const entry of snapshot.entries) {
+      observed.add(entry.event_seq);
+      if (entry.state === "pending") {
+        pending += 1;
+        firstPending = firstPending === null ? entry.event_seq : Math.min(firstPending, entry.event_seq);
+        recoveryPending = true;
+      } else if (entry.state === "rejected") {
+        rejected += 1;
+        if (entry.last_error?.includes("conflict") === true) conflict += 1;
+        recoveryPending = true;
+      } else if (entry.state === "acked" && entry.event_seq > snapshot.last_acked_seq) {
+        recoveryPending = true;
+      }
+    }
+    if (snapshot.last_acked_seq > base.last_acked_seq) recoveryPending = true;
+    if (snapshot.entries.filter((entry) => entry.state === "rejected").length >= 64) rejectedTruncated = true;
+  }
+  if (current === undefined && !recoveryPending) return undefined;
+  let gap = base.gap;
+  if (!gap && observed.size > 0) {
+    let expected = lastAcked + 1;
+    for (const seq of [...observed].sort((a, b) => a - b)) {
+      if (seq > expected) { gap = true; break; }
+      if (seq === expected) expected += 1;
+    }
+  }
+  return {
+    session_id: base.session_id,
+    pending_events: pending,
+    rejected_events: rejected,
+    conflict_events: conflict,
+    last_acked_seq: lastAcked,
+    first_pending_seq: firstPending,
+    gap,
+    paused: base.paused,
+    recovery_pending: base.recovery_pending || recoveryPending,
+    rejected_truncated: rejectedTruncated,
+  };
+}
+
+/** Match OutboxStore's persisted-snapshot validation before summarizing. */
+function validateGenerationSnapshot(value: unknown, sessionId: string): GenerationSnapshot | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const snapshot = value as Record<string, unknown>;
+  if (snapshot.session_id !== sessionId
+    || typeof snapshot.last_acked_seq !== "number" || !Number.isSafeInteger(snapshot.last_acked_seq) || snapshot.last_acked_seq < 0
+    || typeof snapshot.bytes !== "number" || !Number.isSafeInteger(snapshot.bytes)
+    || !Array.isArray(snapshot.entries)) return undefined;
+  const entries: GenerationSnapshot["entries"] = [];
+  let bytes = 0;
+  for (const entry of snapshot.entries) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+    const row = entry as Record<string, unknown>;
+    if (row.session_id !== sessionId
+      || typeof row.event_seq !== "number" || !Number.isSafeInteger(row.event_seq) || row.event_seq < 0
+      || typeof row.event_type !== "string" || typeof row.payload !== "string"
+      || typeof row.payload_hash !== "string"
+      || !["pending", "acked", "rejected"].includes(String(row.state))
+      || (row.operation_id !== undefined && typeof row.operation_id !== "string")
+      || (row.last_error !== undefined && typeof row.last_error !== "string")) return undefined;
+    bytes += Buffer.byteLength(row.payload, "utf8");
+    entries.push({
+      event_seq: row.event_seq,
+      state: String(row.state),
+      ...(typeof row.last_error === "string" ? { last_error: row.last_error } : {}),
+    });
+  }
+  if (bytes !== snapshot.bytes) return undefined;
+  return { last_acked_seq: snapshot.last_acked_seq, entries };
+}
+
+/**
+ * Validate and summarize durable older-generation snapshots. Invalid or
+ * unreadable generations still mark recovery pending, even when the current
+ * projection has no state, so the panel cannot show a clean count.
+ */
+export function summarizeCaptureGenerations(
+  sessionId: string,
+  current: CaptureStatus | undefined,
+  raw: readonly unknown[],
+): CaptureStatus | undefined {
+  const others: GenerationSnapshot[] = [];
+  let invalid = false;
+  for (const value of raw) {
+    const validated = validateGenerationSnapshot(value, sessionId);
+    if (validated === undefined) { invalid = true; continue; }
+    others.push(validated);
+  }
+  const merged = mergeCaptureStatus(current, others);
+  if (invalid) {
+    const base = merged ?? {
+      session_id: sessionId,
+      pending_events: 0,
+      rejected_events: 0,
+      conflict_events: 0,
+      last_acked_seq: 0,
+      first_pending_seq: null,
+      gap: false,
+      paused: false,
+      recovery_pending: true,
+      rejected_truncated: false,
+    };
+    return { ...base, session_id: sessionId, recovery_pending: true };
+  }
+  return merged === undefined || merged.session_id !== "" ? merged : { ...merged, session_id: sessionId };
+}
+
 /**
  * Mount the session-event projection for the lifetime of `ctx`. Returns a
  * disposer. The outbox directory is created lazily on the first captured
@@ -54,6 +198,7 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
   accepting: () => boolean;
   open: (session: Session) => Promise<void>;
   wait: (session: Session) => Promise<void>;
+  status: (session: Session) => CaptureStatus | undefined;
   setMemory: (memory: { wait: (session: Session) => Promise<void>; retire: (session: Session) => Promise<void> }) => void;
   dispose: () => Promise<void>;
 } {
@@ -299,6 +444,21 @@ export function mountLibraOutbox(ctx: Context, bridge: BridgeClient, options: Ou
       });
     },
     wait: async (session) => { await retiring.get(String(session.id)); },
+    status: (session) => {
+      const id = String(session.id);
+      const state = projections.get(session);
+      const current = state?.projection.status(id);
+      const dirs = [...new Set(scan().get(id) ?? [])].filter((dir) => dir !== state?.dir);
+      const raw: unknown[] = [];
+      for (const dir of dirs) {
+        try {
+          raw.push(JSON.parse(readFileSync(join(dir, `${id}.outbox.json`), "utf8")));
+        } catch {
+          raw.push(undefined);
+        }
+      }
+      return summarizeCaptureGenerations(id, current, raw);
+    },
     setMemory: (value) => { memory = value; },
     dispose: async () => {
       // Stop accepting before removing the listener so the Host buffer takes

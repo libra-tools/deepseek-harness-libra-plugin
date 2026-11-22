@@ -36,6 +36,23 @@ export interface ProjectionBatch {
   }>;
 }
 
+/** Durable capture state for one Session's outbox. */
+export interface CaptureStatus {
+  session_id: string;
+  pending_events: number;
+  rejected_events: number;
+  conflict_events: number;
+  last_acked_seq: number;
+  first_pending_seq: number | null;
+  /** A missing sequence between the acknowledged cursor and the newest entry. */
+  gap: boolean;
+  paused: boolean;
+  /** Older durable generations still hold unmerged capture state. */
+  recovery_pending: boolean;
+  /** Rejected diagnostics were pruned, so totals/conflicts may be incomplete. */
+  rejected_truncated: boolean;
+}
+
 export interface ProjectionMetrics {
   queued_events: number;
   queued_bytes: number;

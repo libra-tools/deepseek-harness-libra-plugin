@@ -237,6 +237,7 @@ function panelHarness() {
   const sessionId = `session-${sessionSequence}`;
   const reads = deferredHarness();
   const writes = deferredHarness();
+  const capture = deferredHarness();
   const tabData = new globalThis.AbortController();
   const commands: Array<{ refresh?: () => void }> = [];
   const tabState = {
@@ -264,6 +265,7 @@ function panelHarness() {
       reads.make(method)(params, signal),
     binding: () => Promise.resolve({ ok: true, bindingKey: "key-1", generation: 1 }),
     write: writeHarness(writes),
+    capture: { status: () => capture.make("status")() },
   };
   const evidence = deferredHarness();
   const props = {
@@ -273,7 +275,7 @@ function panelHarness() {
     evidence: { session: () => evidence.make("evidence")() },
     useTabInfo: () => tabState.tab,
   };
-  return { reads, writes, evidence, props, tabState };
+  return { reads, writes, evidence, capture, props, tabState };
 }
 
 interface MountedPanel {
@@ -925,6 +927,167 @@ describe("Libra panel write actions", () => {
     await next.settle();
     expect(findButton(next.tree(), "t:actionRetry")).toBeUndefined();
     next.unmount();
+  });
+
+  it("shows capture state and only a checkpoint-backed commit link", async () => {
+    const harness = panelHarness();
+    const panel = await mountPanel(harness);
+    harness.reads.take("status").resolve(statusResult([STATUS_ROW("seed.txt", "unstaged")]));
+    harness.reads.take("log").resolve(okLog());
+    harness.writes.take("fence").resolve({ ok: true, data: { ...FENCE, bindingKey: "key-1", bindingGeneration: 1 } });
+    harness.capture.take("status").resolve({
+      ok: true,
+      data: {
+        bindingKey: "key-1",
+        bindingGeneration: 1,
+        capture: {
+          session_id: harness.props.sessionId,
+          pending_events: 2,
+          rejected_events: 1,
+          conflict_events: 1,
+          last_acked_seq: 7,
+          first_pending_seq: 9,
+          gap: false,
+          paused: false,
+          recovery_pending: false,
+          rejected_truncated: false,
+        },
+        checkpointState: "ok",
+        checkpoints: [{
+          checkpointId: "cp:aaaaaaaaaaaaaaaa",
+          agentCheckpointId: "agent-cp-1",
+          targetOid: "e".repeat(40),
+          targetVerified: true,
+        }],
+        commitLink: { checkpointId: "cp-1", targetOid: "e".repeat(40) },
+      },
+    });
+    await panel.settle();
+    const rendered = textOf(panel.tree());
+    expect(rendered).toContain("t:captureTitle");
+    expect(rendered).toContain("t:capturePending: 2");
+    expect(rendered).toContain("cp:aaaaaaaaaaaaaaaa");
+    expect(rendered).toContain("t:captureCommitLink eeeeeeee");
+    expect(rendered).not.toContain("t:captureComplete");
+    panel.unmount();
+  });
+
+  it("does not claim a commit link when the bridge has no checkpoint target", async () => {
+    const harness = panelHarness();
+    const panel = await mountPanel(harness);
+    harness.reads.take("status").resolve(statusResult([]));
+    harness.reads.take("log").resolve(okLog());
+    harness.writes.take("fence").resolve({ ok: true, data: { ...FENCE, bindingKey: "key-1", bindingGeneration: 1 } });
+    harness.capture.take("status").resolve({
+      ok: true,
+      data: {
+        bindingKey: "key-1",
+        bindingGeneration: 1,
+        capture: null,
+        checkpointState: "ok",
+        checkpoints: [],
+        commitLink: null,
+      },
+    });
+    await panel.settle();
+    const rendered = textOf(panel.tree());
+    expect(rendered).toContain("t:captureUnknown");
+    expect(rendered).toContain("t:captureNoCheckpoints");
+    expect(rendered).not.toContain("t:captureCommitLink");
+    panel.unmount();
+  });
+
+  it("shows paused and recovery-pending capture states explicitly", async () => {
+    const harness = panelHarness();
+    const panel = await mountPanel(harness);
+    harness.reads.take("status").resolve(statusResult([]));
+    harness.reads.take("log").resolve(okLog());
+    harness.writes.take("fence").resolve({ ok: true, data: { ...FENCE, bindingKey: "key-1", bindingGeneration: 1 } });
+    harness.capture.take("status").resolve({
+      ok: true,
+      data: {
+        bindingKey: "key-1",
+        bindingGeneration: 1,
+        capture: {
+          session_id: harness.props.sessionId,
+          pending_events: 0,
+          rejected_events: 2,
+          conflict_events: 1,
+          last_acked_seq: 4,
+          first_pending_seq: null,
+          gap: true,
+          paused: true,
+          recovery_pending: true,
+          rejected_truncated: true,
+        },
+        checkpointState: "ok",
+        checkpoints: [],
+        commitLink: null,
+      },
+    });
+    await panel.settle();
+    const rendered = textOf(panel.tree());
+    expect(rendered).toContain("t:capturePaused");
+    expect(rendered).toContain("t:captureRecoveryPending");
+    expect(rendered).toContain("t:captureRejectedTruncated");
+    expect(rendered).not.toContain("t:captureNoGap");
+    panel.unmount();
+  });
+
+  it("drops capture output that belongs to a different repository binding", async () => {
+    const harness = panelHarness();
+    const panel = await mountPanel(harness);
+    harness.reads.take("status").resolve(statusResult([]));
+    harness.reads.take("log").resolve(okLog());
+    harness.writes.take("fence").resolve({ ok: true, data: { ...FENCE, bindingKey: "key-1", bindingGeneration: 1 } });
+    harness.capture.take("status").resolve({
+      ok: true,
+      data: {
+        bindingKey: "key-2",
+        bindingGeneration: 1,
+        capture: null,
+        checkpointState: "ok",
+        checkpoints: [{
+          checkpointId: "cp:bbbbbbbbbbbbbbbb",
+          agentCheckpointId: null,
+          targetOid: "e".repeat(40),
+          targetVerified: true,
+        }],
+        commitLink: { checkpointId: "foreign-cp", targetOid: "e".repeat(40) },
+      },
+    });
+    await panel.settle();
+    const rendered = textOf(panel.tree());
+    expect(rendered).toContain("t:captureUnavailable");
+    expect(rendered).not.toContain("foreign-cp");
+    expect(rendered).not.toContain("t:captureCommitLink");
+    panel.unmount();
+  });
+
+  it("starts capture only after the binding check succeeds", async () => {
+    const harness = panelHarness();
+    let resolveBinding!: (value: unknown) => void;
+    (harness.props.libra as unknown as { binding: () => Promise<unknown> }).binding = () =>
+      new Promise((resolve) => { resolveBinding = resolve; });
+    const panel = await mountPanel(harness);
+    expect(harness.capture.pending("status")).toBe(0);
+    resolveBinding({ ok: true, bindingKey: "key-1", generation: 1 });
+    await panel.settle();
+    expect(harness.capture.pending("status")).toBe(1);
+    harness.capture.take("status").resolve({
+      ok: true,
+      data: {
+        bindingKey: "key-1",
+        bindingGeneration: 1,
+        capture: null,
+        checkpointState: "ok",
+        checkpoints: [],
+        commitLink: null,
+      },
+    });
+    await panel.settle();
+    expect(textOf(panel.tree())).toContain("t:captureUnknown");
+    panel.unmount();
   });
 
   it("disables stage/unstage while the fence is unavailable and aborts a pending write on unmount", async () => {

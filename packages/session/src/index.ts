@@ -6,6 +6,7 @@ export {
 export { hashPayload, redactPayload } from "./redaction.js";
 export { SessionProjectionService } from "./projection.js";
 export type {
+  CaptureStatus,
   DisposeResult,
   HarnessSessionEvent,
   OutboxEntry,

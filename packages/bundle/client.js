@@ -92,6 +92,24 @@ globalThis.__ModuleLoader__.load({
       actionTooManyPaths: "This staged set exceeds the 64-path write limit; split the commit.",
       actionPendingLimit: "Too many unresolved repository writes are retained. Resolve an earlier write before starting another Session action.",
       actionResolveFirst: "A previous repository write is unresolved. Reconcile its state, then use libra_vcs_recover with the original action and paths before writing again.",
+      captureTitle: "Session capture",
+      capturePending: "pending",
+      captureAcked: "accepted through sequence",
+      captureRejected: "rejected",
+      captureConflict: "conflict",
+      captureGap: "sequence gap detected",
+      captureNoGap: "no sequence gap",
+      capturePaused: "Capture is paused after an outbox failure; new events are not being queued.",
+      captureRecoveryPending: "An older capture generation still holds unmerged state; treat the counts as incomplete.",
+      captureRejectedTruncated: "Rejected/conflict diagnostics were pruned; the displayed totals are a lower bound.",
+      captureUnknown: "No capture state has been observed for this Session yet.",
+      captureUnavailable: "Capture state is unavailable for the current repository binding.",
+      captureUnsupported: "This bridge does not advertise checkpoint records.",
+      captureCheckpoints: "Checkpoint records",
+      captureNoCheckpoints: "No checkpoint record is associated with this Session.",
+      captureCommitLink: "Linked commit",
+      captureCheckpointOnly: "checkpoint only",
+      captureUnverifiedTarget: "unverified checkpoint target",
       actionRetry: "Retry write",
     };
     const zh = {
@@ -181,6 +199,24 @@ globalThis.__ModuleLoader__.load({
       actionTooManyPaths: "暂存集合超过 64 个路径的写入上限，请拆分提交。",
       actionPendingLimit: "待恢复的仓库写入过多；请先解决已有操作，再开始新的 Session 写入。",
       actionResolveFirst: "仓库中有尚未确认的写入。请先核对状态，再用原动作和路径调用 libra_vcs_recover，然后继续写入。",
+      captureTitle: "会话捕获",
+      capturePending: "待发送",
+      captureAcked: "已确认至序列",
+      captureRejected: "已拒绝",
+      captureConflict: "冲突",
+      captureGap: "检测到序列缺口",
+      captureNoGap: "无序列缺口",
+      capturePaused: "仓库 outbox 写入失败，捕获已暂停；新事件不会被排队。",
+      captureRecoveryPending: "较早的捕获代际仍有未合并状态；当前计数不完整。",
+      captureRejectedTruncated: "已拒绝/冲突诊断已被裁剪；显示的计数是下限。",
+      captureUnknown: "尚未观察到该 Session 的捕获状态。",
+      captureUnavailable: "当前仓库绑定的捕获状态不可用。",
+      captureUnsupported: "该 bridge 未声明 checkpoint 记录能力。",
+      captureCheckpoints: "检查点记录",
+      captureNoCheckpoints: "该 Session 没有关联的检查点记录。",
+      captureCommitLink: "关联提交",
+      captureCheckpointOnly: "仅检查点",
+      captureUnverifiedTarget: "未验证的检查点目标",
       actionRetry: "重试写入",
     };
 
@@ -541,6 +577,9 @@ globalThis.__ModuleLoader__.load({
       const [diagnostics, setDiagnostics] = React.useState({ available: false });
       const [expanded, setExpanded] = React.useState(false);
       const [fence, setFence] = React.useState(null);
+      const [capture, setCapture] = React.useState(null);
+      const captureGeneration = React.useRef(0);
+      const captureDirty = React.useRef(true);
       const [message, setMessage] = React.useState("");
       const [writeBusy, setWriteBusy] = React.useState(false);
       const [preparing, setPreparing] = React.useState(false);
@@ -689,6 +728,8 @@ globalThis.__ModuleLoader__.load({
       };
       const clearAllViews = () => {
         abortAll();
+        captureGeneration.current += 1;
+        setCapture(null);
         diagnosticsGeneration.current += 1;
         readIdentities.current.clear();
         setStatus({ entries: [], next: null });
@@ -752,6 +793,12 @@ globalThis.__ModuleLoader__.load({
             ok: true,
             initialized: true,
           };
+          // Capture is only requested after the binding is validated, so a
+          // refresh cannot accept a response for the previous binding.
+          if (captureDirty.current) {
+            captureDirty.current = false;
+            loadCapture();
+          }
           if (bindingFailureSource.current !== "read") {
             bindingFailureSource.current = null;
             setBinding(null);
@@ -829,6 +876,29 @@ globalThis.__ModuleLoader__.load({
             if (diagnosticsGeneration.current !== mine) return;
             setDiagnostics({ available: false });
           });
+      };
+
+      const loadCapture = () => {
+        captureGeneration.current += 1;
+        const mine = captureGeneration.current;
+        return Promise.resolve()
+          .then(() => libra.capture.status())
+          .then((result) => {
+            if (captureGeneration.current !== mine) return;
+            const current = bindingState.current;
+            if (current.initialized !== true || current.ok !== true) {
+              setCapture(null);
+              return;
+            }
+            if (result === null || result === undefined || result.ok !== true
+              || result.data.bindingKey !== current.key
+              || result.data.bindingGeneration !== current.generation) {
+              setCapture(null);
+              return;
+            }
+            setCapture(result);
+          })
+          .catch(() => { if (captureGeneration.current === mine) setCapture(null); });
       };
 
       const loadFence = () => {
@@ -1063,6 +1133,8 @@ globalThis.__ModuleLoader__.load({
       };
 
       const refresh = () => {
+        captureGeneration.current += 1;
+        setCapture(null);
         if (prepareAbort.current !== null) {
           prepareAbort.current.abort();
           prepareAbort.current = null;
@@ -1094,6 +1166,7 @@ globalThis.__ModuleLoader__.load({
         loadHistory(null);
         loadDiagnostics(true);
         loadFence();
+        captureDirty.current = true;
         checkBinding();
       };
 
@@ -1185,6 +1258,47 @@ globalThis.__ModuleLoader__.load({
       const visibleTransition = tab.tab.visible && becameVisible;
       const suppressCached = verifying || validationFailed || visibleTransition;
       const banner = binding === null ? null : h("p", { role: "status", style: { margin: "8px 0" } }, t(binding.key));
+      const captureData = capture !== null && capture.ok === true ? capture.data : null;
+      const captureSection = h("div", null,
+        sectionHeading(t("captureTitle")),
+        capture === null || capture.ok !== true
+          ? h("p", { style: { margin: "4px 0" } }, t("captureUnavailable"))
+          : captureData.capture === null
+            ? h("p", { style: { margin: "4px 0" } }, t("captureUnknown"))
+            : h("div", null,
+              h("p", { style: { margin: "4px 0" } },
+                `${t("captureAcked")} ${captureData.capture.last_acked_seq}`),
+              h("p", { style: { margin: "4px 0" } },
+                `${t("capturePending")}: ${captureData.capture.pending_events} · `
+                + `${t("captureRejected")}: ${captureData.capture.rejected_events} · `
+                + `${t("captureConflict")}: ${captureData.capture.conflict_events}`),
+              captureData.capture.paused
+                ? h("p", { style: { margin: "4px 0" } }, t("capturePaused"))
+                : null,
+              captureData.capture.rejected_truncated
+                ? h("p", { style: { margin: "4px 0" } }, t("captureRejectedTruncated"))
+                : null,
+              h("p", { style: { margin: "4px 0" } },
+                captureData.capture.recovery_pending ? t("captureRecoveryPending")
+                  : captureData.capture.gap ? t("captureGap") : t("captureNoGap"))),
+        captureData === null ? null : captureData.checkpointState === "unsupported_capability"
+          ? h("p", { style: { margin: "4px 0" } }, t("captureUnsupported"))
+          : captureData.checkpointState === "unavailable"
+            ? h("p", { style: { margin: "4px 0" } }, t("captureUnavailable"))
+            : h("div", null,
+              h("p", { style: { margin: "4px 0", fontWeight: 600 } }, t("captureCheckpoints")),
+              captureData.checkpoints.length === 0
+                ? h("p", { style: { margin: "4px 0" } }, t("captureNoCheckpoints"))
+                : h("ul", { style: { margin: "4px 0", paddingLeft: 18 } },
+                  captureData.checkpoints.map((checkpoint) => h("li", { key: checkpoint.checkpointId },
+                    h("span", { style: { fontFamily: "monospace" } }, checkpoint.checkpointId),
+                    checkpoint.targetOid === null
+                      ? ` · ${t("captureCheckpointOnly")}`
+                      : checkpoint.targetVerified
+                        ? ` · ${t("captureCommitLink")} ${checkpoint.targetOid}`
+                        : ` · ${t("captureUnverifiedTarget")} ${checkpoint.targetOid}`))),
+              captureData.commitLink === null ? null : h("p", { style: { margin: "4px 0" } },
+                `${t("captureCommitLink")}: ${captureData.commitLink.targetOid}`)));
       const groups = groupStatusEntries(status.entries);
       const loading = binding === null && status.entries.length === 0 && history.commits.length === 0
         && errors.status === undefined && errors.history === undefined;
@@ -1232,7 +1346,8 @@ globalThis.__ModuleLoader__.load({
           errors.history !== undefined ? h("p", { role: "status" }, t(errors.history)) : null,
           history.commits.length === 0 ? h("p", null, t("panelEmpty")) : historySection(history, detail, t, loadHistory, openCommit, loadDetailMore)),
         suppressCached ? null : errors.detail !== undefined ? h("p", { role: "status" }, t(errors.detail)) : null,
-        suppressCached || validationFailed || binding !== null ? null : diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }));
+        suppressCached || validationFailed || binding !== null ? null : diagnosticsSection(diagnostics, expanded, t, () => { const next = !expanded; setExpanded(next); if (next) loadDiagnostics(); }),
+        suppressCached || binding !== null ? null : captureSection);
     }
 
     function LibraTitle(props) {
@@ -1246,6 +1361,11 @@ globalThis.__ModuleLoader__.load({
         },
         binding() {
           return remote.libraVcs.binding(sessionId);
+        },
+        capture: {
+          status() {
+            return remote.libraCapture.status(sessionId);
+          },
         },
         write: {
           fence() {

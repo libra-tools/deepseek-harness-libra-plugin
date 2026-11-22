@@ -1,5 +1,5 @@
 /** Host-owned per-Session Libra bridge lifecycle (plan-20261118 LVC-03). */
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,17 @@ import { invokeVcsReadTool, LibraVcsReadService, VcsHostError } from "./vcs-read
 import { evaluateSessionEvidence, LibraEvidenceRemote } from "./evidence-remote.js";
 import { LibraVcsRemote } from "./vcs-remote.js";
 import { invokeVcsWriteTool, LibraVcsWriteRemote, LibraVcsWriteService } from "./vcs-write.js";
+import {
+  applyRejectedSpool,
+  hasQuarantinedSpool,
+  LibraCaptureRemote,
+  LibraCaptureStatusService,
+  hasSpoolFailure,
+  readRejectedSpoolEvents,
+  recordRejectedSpoolEvent,
+  recordSpoolFailure,
+  withSpooledCapture,
+} from "./capture-status.js";
 import { libraMemoryProjection } from "./memory-projection.js";
 import {
   RepositoryRegistry,
@@ -69,6 +80,7 @@ export interface RepositoryRuntimeDependencies {
 
 interface PerRepositoryRuntime {
   binding: RepositoryBinding;
+  bridge: BridgeClient;
   sessions: Set<string>;
   outbox: ReturnType<typeof mountLibraOutbox>;
   workspace: ReturnType<typeof mountLibraWorkspace>;
@@ -133,12 +145,24 @@ export async function applyPerSession(
     "pending-events",
   );
   const spoolWarned = new Set<string>();
+  const spoolRejectionFailures = new Set<string>();
   const deliveryFenced = new Set<string>();
   const SPOOL_WARN_BYTES = 64 * 1024 * 1024;
   const spoolName = (sessionId: string, identityKey: string): string =>
     `${sessionId.replace(/[^A-Za-z0-9._:-]/g, "_")}.${identityKey.replace(/[^A-Za-z0-9._:-]/g, "_")}.jsonl`;
   const spoolPath = (sessionId: string, identityKey: string): string =>
     join(spoolRoot, spoolName(sessionId, identityKey));
+  // A failure marker is never cleared: later successful counts cannot prove
+  // how many earlier events were lost, so the view stays recovery-pending.
+  const rememberRejectionFailure = (sessionId: string): void => {
+    spoolRejectionFailures.add(sessionId);
+    try {
+      recordSpoolFailure(spoolRoot, sessionId);
+    } catch (error) {
+      ctx.logger.warn(`libra: could not persist a rejection-failure marker for ${sessionId}: ${String(error)}`);
+    }
+  };
+
   const ensureSpoolRoot = (): void => {
     mkdirSync(spoolRoot, { recursive: true, mode: 0o700 });
     // An existing directory may carry broader modes from an older version.
@@ -155,6 +179,7 @@ export async function applyPerSession(
         spoolWarned.add(sessionId);
         ctx.logger.warn(`libra: session ${sessionId} has no trusted directory; refusing to spool its events`);
       }
+      rememberRejectionFailure(sessionId);
       return false;
     }
     const redacted = redactPayload(JSON.stringify(event.data));
@@ -162,6 +187,12 @@ export async function applyPerSession(
       if (!spoolWarned.has(sessionId)) {
         spoolWarned.add(sessionId);
         ctx.logger.warn(`libra: session ${sessionId} has an event the spool cannot redact (${redacted.reason}); not persisted`);
+      }
+      try {
+        recordRejectedSpoolEvent(spoolRoot, sessionId);
+      } catch (error) {
+        ctx.logger.warn(`libra: could not record a spool rejection for ${sessionId}: ${String(error)}`);
+        rememberRejectionFailure(sessionId);
       }
       return false;
     }
@@ -178,6 +209,7 @@ export async function applyPerSession(
       return true;
     } catch (error) {
       ctx.logger.warn(`libra: could not spool an event for session ${sessionId}: ${String(error)}`);
+      rememberRejectionFailure(sessionId);
       return false;
     }
   };
@@ -399,6 +431,7 @@ export async function applyPerSession(
 
         const runtime: PerRepositoryRuntime = {
           binding,
+          bridge: binding.client,
           sessions: new Set(),
           outbox,
           workspace,
@@ -663,6 +696,55 @@ export async function applyPerSession(
   // The panel's write namespace attaches the fixed user-action approval; the
   // Agent tool path reaches the same service only after DSH approval.
   new LibraVcsWriteRemote(ctx, vcsWriteService, lookupSession);
+  // Capture status is read-only projection state plus bridge checkpoint rows;
+  // it never mutates and never treats flush/close as proof of capture.
+  const captureStatusService = new LibraCaptureStatusService(lookupSession, async (rawSession) => {
+    const session = rawSession as Session;
+    const sessionId = String(session.id);
+    const bound = registry.sessionBinding(sessionId);
+    if (bound === undefined) return undefined;
+    const runtime = runtimes.get(bound.key);
+    if (runtime === undefined || !runtime.sessions.has(sessionId)) return undefined;
+    if (!sessionServedBy(bound.key)(session)) return undefined;
+    // Events that could not enter the outbox live in the binding-scoped
+    // durable spool; they are not zero and must keep capture incomplete.
+    let spooled = false;
+    for (const scope of [bound.key, "unbound", "quarantine"]) {
+      try {
+        if (statSync(spoolPath(sessionId, scope)).size > 0) spooled = true;
+      } catch (error) {
+        // Only a missing spool is empty; permission/IO errors stay incomplete.
+        if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") spooled = true;
+      }
+    }
+    try {
+      if (hasQuarantinedSpool(sessionId, readdirSync(spoolRoot))) spooled = true;
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") spooled = true;
+    }
+    if (spoolRejectionFailures.has(sessionId)) spooled = true;
+    try {
+      if (hasSpoolFailure(spoolRoot, sessionId)) spooled = true;
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") spooled = true;
+    }
+    let rejected = 0;
+    try { rejected = readRejectedSpoolEvents(spoolRoot, sessionId); }
+    catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") spooled = true;
+    }
+    return {
+      capture: applyRejectedSpool(
+        withSpooledCapture(runtime.outbox.status(session) ?? null, sessionId, spooled),
+        sessionId,
+        rejected,
+      ),
+      bridge: runtime.bridge,
+      bindingKey: bound.key,
+      generation: registry.sessionGeneration(sessionId) ?? 0,
+    };
+  });
+  new LibraCaptureRemote(ctx, captureStatusService);
 
   new LibraEvidenceRemote(ctx, (sessionId) => {
     const failure = bindingFailures.get(sessionId);

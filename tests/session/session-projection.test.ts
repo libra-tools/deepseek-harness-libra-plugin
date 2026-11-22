@@ -109,6 +109,78 @@ describe("session-projection", () => {
     await service.flush({ id: "child" });
   });
 
+  it("reports durable pending, rejected, gap and acknowledgement state", () => {
+    const outbox = new OutboxStore(mkdtempSync(join(tmpdir(), "dsh-outbox-status-")));
+    outbox.enqueue({ session_id: "status", event_seq: 1, event_type: "message", payload: "one" });
+    outbox.enqueue({ session_id: "status", event_seq: 3, event_type: "message", payload: "three" });
+    outbox.applyAppendResult("status", 1, [{ seq: 1, status: "accepted" }]);
+    const status = outbox.captureStatus("status");
+    expect(status).toMatchObject({
+      pending_events: 1,
+      last_acked_seq: 1,
+      first_pending_seq: 3,
+      gap: true,
+      rejected_events: 0,
+      conflict_events: 0,
+    });
+  });
+
+  it("keeps a gap after accepted events are flushed and after reload", () => {
+    const root = mkdtempSync(join(tmpdir(), "dsh-outbox-gap-"));
+    const outbox = new OutboxStore(root);
+    for (const seq of [1, 3]) {
+      outbox.enqueue({ session_id: "gap", event_seq: seq, event_type: "message", payload: `e${seq}` });
+    }
+    outbox.applyAppendResult("gap", 1, [
+      { seq: 1, status: "accepted" },
+      { seq: 3, status: "accepted" },
+    ]);
+    expect(outbox.captureStatus("gap")).toMatchObject({ pending_events: 0, last_acked_seq: 1, gap: true });
+    const reloaded = new OutboxStore(root);
+    expect(reloaded.captureStatus("gap").gap).toBe(true);
+  });
+
+  it("marks pruned rejected diagnostics as a lower bound", () => {
+    const outbox = new OutboxStore(mkdtempSync(join(tmpdir(), "dsh-outbox-prune-")));
+    for (let seq = 1; seq <= 65; seq += 1) {
+      outbox.enqueue({
+        session_id: "pruned",
+        event_seq: seq,
+        event_type: "message",
+        payload: "token sk-abcdefghijklmnopqrstuvwxyz",
+      });
+    }
+    const status = outbox.captureStatus("pruned");
+    expect(status.rejected_events).toBe(64);
+    expect(status.rejected_truncated).toBe(true);
+  });
+
+  it("distinguishes bridge conflicts from other rejections", () => {
+    const outbox = new OutboxStore(mkdtempSync(join(tmpdir(), "dsh-outbox-conflict-")));
+    for (const seq of [1, 2]) {
+      outbox.enqueue({ session_id: "conflict", event_seq: seq, event_type: "message", payload: `e${seq}` });
+    }
+    outbox.applyAppendResult("conflict", 2, [
+      { seq: 1, status: "conflict" },
+      { seq: 2, status: "rejected" },
+    ]);
+    expect(outbox.captureStatus("conflict")).toMatchObject({
+      pending_events: 0,
+      rejected_events: 2,
+      conflict_events: 1,
+      gap: false,
+    });
+  });
+
+  it("reports an enqueue failure as paused even with no pending events", () => {
+    const root = mkdtempSync(join(tmpdir(), "dsh-outbox-paused-"));
+    // A one-byte store capacity rejects the first payload and pauses the session.
+    const service = new SessionProjectionService(new OutboxStore(root, 1), { connect: async () => ({}) } as unknown as BridgeClient);
+    expect(() => service.capture({ session_id: "paused", event_seq: 1, event_type: "message", payload: "one" }))
+      .toThrow(/quota/);
+    expect(service.status("paused")).toMatchObject({ pending_events: 0, paused: true });
+  });
+
   it("emits drain warning when dispose times out with pending events", async () => {
     const { service, bridge: client } = makeProjection();
     bridge = client;

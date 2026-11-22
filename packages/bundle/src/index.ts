@@ -34,6 +34,19 @@ export { evaluateSessionEvidence, LibraEvidenceRemote } from "./evidence-remote.
 export type { BridgeEvidenceInfo, EvidenceResolver, EvidenceResult, SessionEvidence } from "./evidence-remote.js";
 export { LibraVcsRemote, type SessionById } from "./vcs-remote.js";
 export {
+  LibraCaptureRemote,
+  LibraCaptureStatusService,
+  parseCheckpointRows,
+  readCaptureStatus,
+} from "./capture-status.js";
+export type {
+  CaptureCheckpoint,
+  CaptureRemoteResult,
+  CaptureScope,
+  CaptureStatusView,
+  CheckpointState,
+} from "./capture-status.js";
+export {
   USER_ACTION_APPROVAL,
   LibraVcsWriteRemote,
   LibraVcsWriteService,

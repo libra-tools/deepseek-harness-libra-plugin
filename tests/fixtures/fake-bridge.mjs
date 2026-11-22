@@ -483,6 +483,23 @@ rl.on("line", (line) => {
     });
     return;
   }
+  if (frame.method === "checkpoint.list") {
+    const sessionId = frame.params?.session_id;
+    const checkpoints = typeof sessionId === "string" && sessionId.startsWith("capture-")
+      ? [{
+        checkpoint_id: "cp-fixture-1",
+        bridge_session_id: sessionId,
+        agent_checkpoint_id: "agent-cp-fixture",
+        target_oid: "e".repeat(40),
+      }]
+      : [];
+    writeResponse({
+      jsonrpc: "2.0",
+      result: { schema_version: 1, status: "ok", data: { limit: 20, checkpoints }, warnings: [] },
+      id,
+    });
+    return;
+  }
   if (frame.method === "context.get") {
     const checkpointId = frame.params?.checkpoint_id;
     writeResponse({

@@ -11,7 +11,7 @@ import { utf8ByteLength } from "@libra/dsh-bridge-client";
 import type { AgentBridgeContract } from "@libra/dsh-protocol";
 
 import { hashPayload, redactPayload } from "./redaction.js";
-import type { HarnessSessionEvent, OutboxEntry, OutboxSnapshot } from "./types.js";
+import type { CaptureStatus, HarnessSessionEvent, OutboxEntry, OutboxSnapshot } from "./types.js";
 
 export const DEFAULT_OUTBOX_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -176,7 +176,10 @@ export class OutboxStore {
         entry.state = "acked";
       }
     }
-    snapshot.entries = snapshot.entries.filter((entry) => entry.state !== "acked");
+    // Acknowledged entries above the contiguous cursor prove an out-of-order
+    // acceptance (a gap). Keep them as evidence until the cursor catches up.
+    snapshot.entries = snapshot.entries.filter((entry) =>
+      entry.state !== "acked" || entry.event_seq > snapshot.last_acked_seq);
     this.pruneRejectedDiagnostics(snapshot);
     snapshot.bytes = this.bytesFor(snapshot.entries);
     this.persist(snapshot);
@@ -191,6 +194,37 @@ export class OutboxStore {
     const keepFrom = rejected.length - this.maxRejectedDiagnostics;
     const dropSeqs = new Set(rejected.slice(0, keepFrom).map((entry) => entry.event_seq));
     snapshot.entries = snapshot.entries.filter((entry) => !dropSeqs.has(entry.event_seq));
+  }
+
+  /**
+   * Durable capture state for display. Accepted events are those covered by
+   * the bridge's last-acknowledged sequence; a missing sequence inside the
+   * observed window is a capture gap, never silently treated as complete.
+   */
+  captureStatus(sessionId: string): CaptureStatus {
+    const snapshot = this.load(sessionId);
+    const pending = snapshot.entries.filter((entry) => entry.state === "pending");
+    const rejected = snapshot.entries.filter((entry) => entry.state === "rejected");
+    const conflict = rejected.filter((entry) => entry.last_error?.includes("conflict") === true);
+    const observed = [...new Set(snapshot.entries.map((entry) => entry.event_seq))].sort((a, b) => a - b);
+    let gap = false;
+    let expected = snapshot.last_acked_seq + 1;
+    for (const seq of observed) {
+      if (seq > expected) { gap = true; break; }
+      if (seq === expected) expected += 1;
+    }
+    return {
+      session_id: sessionId,
+      pending_events: pending.length,
+      rejected_events: rejected.length,
+      conflict_events: conflict.length,
+      last_acked_seq: snapshot.last_acked_seq,
+      first_pending_seq: pending.length === 0 ? null : Math.min(...pending.map((entry) => entry.event_seq)),
+      gap,
+      paused: snapshot.bytes >= this.maxBytes,
+      recovery_pending: false,
+      rejected_truncated: rejected.length >= this.maxRejectedDiagnostics,
+    };
   }
 
   parentSessionId(sessionId: string): string | undefined {
